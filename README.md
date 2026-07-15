@@ -13,11 +13,13 @@ built incrementally.
 
 ## Status
 
-The first piece of the verification pipeline is implemented: extracting an
-invoice total from raw invoice text and checking that the extracted amount
-actually appears in that text (matched by numeric value, not by substring). The
-result is one of `grounded`, `not_grounded`, or `ungroundable` — not yet a final
-allow/block/escalate decision.
+The verification core is working end to end:
+
+- **Grounding** — extract an invoice total from raw text and confirm the amount actually appears there, matched by numeric value, not substring (`grounded` / `not_grounded` / `ungroundable`).
+- **Deterministic checks + decision** — structural arithmetic, currency, amount-vs-total, vendor, and duplicate checks over a structured invoice, producing a real **ALLOW / BLOCK / ESCALATE** decision with a machine-readable reason and a score.
+- **Retry loop** — a caller consumes a BLOCK reason, applies the fix, and resubmits until it reaches ALLOW, or routes to a human when it can't. The decision record is never rewritten by the loop.
+
+Still to come: policy config, an LLM agent with human-in-the-loop, a web dashboard, and an HTTP/MCP interface.
 
 ## Development
 

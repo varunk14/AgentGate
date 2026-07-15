@@ -118,6 +118,11 @@ Adjustment verification (grounding each adjustment) remains a **named later mile
 **Reasoning.** Running only the current slice's tests means "each slice works" holds only on the day it was built; the next slice can silently invalidate it (a house of cards). A later slice reddening an earlier test is the discipline working — a real regression caught — and D23 then decides whether the code is wrong or the spec changed.
 **Boundary.** Affordable precisely because CI is fully stubbed and deterministic (D9): no live LLM calls, no rate limits, so running everything every time stays fast and free. Live-marked real-provider tests remain outside CI.
 
+## D25 — The retry loop never rewrites the gate's verdict
+**Decision.** The retry loop consumes a `Decision` and may resubmit a fixed action, but it **never mutates** the `Decision` returned by `decide()`. The loop reports its own outcome separately (a `resolution`: allowed / escalated-by-gate / escalated-to-human). When the loop gives up — cap exhausted or the block is unfixable — the returned gate `Decision` still reads BLOCK; the escalation is expressed as the loop's resolution, not by turning BLOCK into ESCALATE on the Decision.
+**Reasoning.** `decide()` is pure and its output is the product's core artifact — the thing that gets logged, traced, and shown in the dashboard. If any caller can rewrite BLOCK into ESCALATE, then a `Decision` in a log means two different things depending on who produced it, and the record becomes untrustworthy. Cap exhaustion must still fail closed (don't retry forever, don't approve), but that safety behavior belongs to the *loop*, reported by the loop, not smuggled into the gate's verdict. This keeps a one-to-one meaning between a `Decision` value and what the checks actually found.
+**Boundary.** Consumers must read the loop's `resolution` (not just `final_decision.decision`) to know whether a BLOCK was routed to a human. That is the intended contract: the verdict says what the evidence showed; the resolution says what the loop did about it.
+
 ---
 
 ## Roadmap re-sequence (risk-first, thesis-first)
