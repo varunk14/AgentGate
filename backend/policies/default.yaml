@@ -1,0 +1,22 @@
+# AgentGate policy — typed thresholds applied WITHIN the decision precedence
+# (BLOCK > ESCALATE > ALLOW). Policy may only ADD escalations; it can never open
+# or weaken the deterministic gate (fail-closed; DECISIONS D28). All numbers are
+# parsed to Decimal, never float (D1).
+escalate_if:
+  amount_greater_than: 10000   # action amounts above this route to a human
+  score_below: 0.80            # grounding-coverage score below this routes to a human
+
+# Asserted spec/code drift tripwire, NOT a behaviour toggle: this set must
+# EXACTLY equal the checks the verifier marks CheckKind.critical, or load_policy
+# raises PolicyError. There is deliberately no `block_if.any_critical_check_failed`:
+# that pre-D3 "any critical failure => BLOCK" rule is false — only an
+# agent-fixable critical failure BLOCKs; source-invalid arithmetic and currency
+# mismatch ESCALATE (D3). Encoding it would enforce a lie.
+critical_checks:
+  - structural_arithmetic
+  - currency_match
+  - action_amount_matches_total
+
+retry:
+  max_attempts: 2              # agent_fixable blocks only; 1 initial + up to 2 retries = 3 submissions
+  on_cap_exhausted: escalate   # loop gives up -> route to a human (fail-closed)

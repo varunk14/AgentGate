@@ -5,6 +5,7 @@ description = "Pre-action reliability gate for AI agents — verifies proposed a
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2",
+    "pyyaml>=6",
 ]
 
 [project.optional-dependencies]

@@ -66,10 +66,28 @@ class LineItemKind(str, Enum):
 
 class LineItem(BaseModel):
     description: str
-    quantity: int
+    quantity: Decimal
     unit_price: Money
     amount: Money
     kind: LineItemKind = LineItemKind.charge
+
+    @field_validator("quantity", mode="before")
+    @classmethod
+    def _quantity_no_float(cls, v: object) -> object:
+        """Quantity is ``Decimal`` (fractional billing — 2.5 hours, 1.5 kg — is
+        legitimate) parsed from a string or int, never float (D1/D29). It is
+        consumed by no check, so widening it only stops rejecting valid invoices.
+        """
+        if isinstance(v, bool):  # bool is an int subclass — not a valid quantity
+            raise ValueError("quantity must be a number, not a bool.")
+        if isinstance(v, float):
+            raise ValueError("quantity must be a string or int, never float (D1).")
+        if isinstance(v, str):
+            try:
+                return Decimal(v.strip())
+            except (InvalidOperation, ValueError) as exc:
+                raise ValueError(f"quantity is not a valid decimal: {v!r}") from exc
+        return v
 
 
 class TaxLine(BaseModel):

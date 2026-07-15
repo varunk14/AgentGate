@@ -24,11 +24,13 @@ from typing import Optional
 from pydantic import BaseModel
 
 from .schemas import (
+    ActionType,
     BlockReason,
     BlockType,
     Check,
     CheckKind,
     Invoice,
+    LineItem,
     LineItemKind,
     Money,
     ProposedAction,
@@ -280,3 +282,38 @@ def run_checks(
         check_vendor_match(invoice, action),
         check_duplicate(invoice, is_duplicate),
     ]
+
+
+def critical_check_names() -> frozenset[str]:
+    """The check names the verifier emits as ``CheckKind.critical``, derived from
+    an actual ``run_checks`` call so the policy drift-assertion (D28) cannot
+    silently fall out of sync with the code. A check's ``type`` is invariant of
+    pass/fail, so the sample's values are irrelevant — only the emitted name set
+    matters."""
+    sample_invoice = Invoice(
+        invoice_number="_",
+        vendor="_",
+        date="_",
+        currency="USD",
+        line_items=[
+            LineItem(
+                description="_",
+                quantity=1,
+                unit_price=Money(value="1", currency="USD"),
+                amount=Money(value="1", currency="USD"),
+                kind=LineItemKind.charge,
+            )
+        ],
+        total=Money(value="1", currency="USD"),
+    )
+    sample_action = ProposedAction(
+        action_type=ActionType.approve_payment,
+        invoice_number="_",
+        amount=Money(value="1", currency="USD"),
+        vendor="_",
+    )
+    return frozenset(
+        outcome.check.name
+        for outcome in run_checks(sample_invoice, sample_action)
+        if outcome.check.type is CheckKind.critical
+    )

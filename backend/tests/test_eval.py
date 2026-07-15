@@ -26,12 +26,16 @@ def test_gate_metrics_and_honest_reporting():
     # Every case decides exactly as the spec labels it (teeth for all checks).
     assert report.mismatches == []
 
-    # Pinned confusion matrix and metrics for the current dataset.
-    assert (report.tp, report.fp, report.fn, report.tn) == (7, 3, 3, 6)
-    assert report.precision == Decimal("0.700")
-    assert report.recall == Decimal("0.700")
-    assert report.false_positive_rate == Decimal("0.333")
-    assert report.in_scope_recall == Decimal("1.000")
+    # Pinned confusion matrix and metrics for the current dataset. The policy
+    # amount_greater_than threshold (PRD SS8) escalates fp_trap_large_amount
+    # (250000 > 10000): a legitimate large payment now routes to a human, which
+    # is a FALSE POSITIVE by the honest human-cost accounting (D26), moving that
+    # case TN -> FP versus the pre-policy dataset.
+    assert (report.tp, report.fp, report.fn, report.tn) == (7, 4, 3, 5)
+    assert report.precision == Decimal("0.636")  # 7 / 11
+    assert report.recall == Decimal("0.700")  # 7 / 10, unchanged
+    assert report.false_positive_rate == Decimal("0.444")  # 4 / 9
+    assert report.in_scope_recall == Decimal("1.000")  # 7 / 7, unchanged
 
 
 def test_out_of_scope_misses_reported_honestly():
