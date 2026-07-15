@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: pip install -e "backend[dev]"
+      - name: Test
+        # Live-provider tests are excluded by pytest addopts; the suite is
+        # fully stubbed and deterministic, so it runs on every push.
+        run: pytest
+        working-directory: backend
