@@ -113,3 +113,59 @@ class ProposedAction(BaseModel):
     vendor: str
     adjustments: list = []
     agent_rationale: str = ""
+
+
+class CheckKind(str, Enum):
+    critical = "critical"
+    soft = "soft"
+
+
+class Check(BaseModel):
+    """One verification check's result (a row in the Decision's checks table)."""
+
+    name: str
+    type: CheckKind
+    passed: bool
+    detail: str = ""
+
+
+class BlockType(str, Enum):
+    agent_fixable = "agent_fixable"  # the action misread a valid source; retry (cap 2)
+    source_invalid = "source_invalid"  # the source is internally inconsistent; do not retry
+
+
+class BlockReason(BaseModel):
+    """Machine-readable reason attached to a BLOCK or an ESCALATE (PRD §6).
+
+    ``expected``/``received`` are ``Money`` for money-valued checks and plain
+    strings for non-money ones (vendor). ``block_type`` is set for the two block
+    kinds (D7) and left ``None`` for other escalate reasons (currency, vendor,
+    duplicate, declared-adjustment)."""
+
+    check: str
+    expected: Optional[Money | str] = None
+    received: Optional[Money | str] = None
+    field_to_change: Optional[str] = None
+    block_type: Optional[BlockType] = None
+    message: str
+
+
+class DecisionType(str, Enum):
+    allow = "allow"
+    block = "block"
+    escalate = "escalate"
+
+
+class Decision(BaseModel):
+    """What AgentGate returns (PRD §6). ``trace_id``/``latency_ms``/``timestamp``
+    are populated at the API boundary; the core decision logic is pure."""
+
+    decision: DecisionType
+    score: Decimal
+    checks: list[Check] = []
+    reasons: list[BlockReason] = []
+    evidence_used: list[str] = []
+    proposed_action: Optional[ProposedAction] = None
+    trace_id: Optional[str] = None
+    latency_ms: Optional[int] = None
+    timestamp: Optional[str] = None

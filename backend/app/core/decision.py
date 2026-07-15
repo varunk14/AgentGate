@@ -21,6 +21,8 @@ from pydantic import BaseModel, ConfigDict
 from .extractor import ExtractionError, extract_total
 from .grounding import is_grounded
 from .llm_router import call_llm
+from .schemas import Decision, DecisionType, Invoice, ProposedAction
+from .verifier import CheckOutcome, Route, run_checks
 
 
 class GroundingResult(str, Enum):
@@ -70,4 +72,51 @@ def assess_grounding(
         currency=total.currency,
         detail=f"Extracted total {total.value} does not appear as a money value "
         "in the source text.",
+    )
+
+
+def _score(outcomes: list[CheckOutcome]) -> Decimal:
+    """score = (soft-check pass ratio) × (grounding coverage) (D2/D16).
+
+    Critical checks are a separate hard gate and are NOT in the score. For a
+    structured source with no LLM in the path, grounding coverage = 1.0.
+    """
+    soft = [o for o in outcomes if o.check.type.value == "soft"]
+    if soft:
+        passed = sum(1 for o in soft if o.check.passed)
+        ratio = Decimal(passed) / Decimal(len(soft))
+    else:
+        ratio = Decimal(1)
+    grounding_coverage = Decimal("1.0")  # structured source, no LLM (D2)
+    return (ratio * grounding_coverage).quantize(Decimal("0.01"))
+
+
+def decide(
+    invoice: Invoice, action: ProposedAction, *, is_duplicate: bool = False
+) -> Decision:
+    """Assemble a real ALLOW/BLOCK/ESCALATE Decision from the deterministic checks.
+
+    Precedence BLOCK > ESCALATE > ALLOW (D3): an agent-fixable failure short-
+    circuits to BLOCK; any non-agent-fixable failure escalates; otherwise allow.
+    Pure — no trace_id/timestamp/latency (those are set at the API boundary).
+    """
+    outcomes = run_checks(invoice, action, is_duplicate=is_duplicate)
+    checks = [o.check for o in outcomes]
+    block_reasons = [o.reason for o in outcomes if o.route == Route.block and o.reason]
+    escalate_reasons = [o.reason for o in outcomes if o.route == Route.escalate and o.reason]
+
+    if block_reasons:
+        result, reasons = DecisionType.block, block_reasons
+    elif escalate_reasons:
+        result, reasons = DecisionType.escalate, escalate_reasons
+    else:
+        result, reasons = DecisionType.allow, []
+
+    return Decision(
+        decision=result,
+        score=_score(outcomes),
+        checks=checks,
+        reasons=reasons,
+        evidence_used=[f"invoice:{invoice.invoice_number}"],
+        proposed_action=action,
     )
