@@ -15,6 +15,7 @@ Mutation checks (a plausible wrong impl MUST redden >=1 test):
   * let the loop rewrite BLOCK->ESCALATE  -> test_verdict_never_rewritten reddens
   * mis-map ESCALATE in _resolution_for   -> GATE b (escalated_by_gate) reddens
   * off-by-one / remove the cap bound     -> test_cap_exhausted reddens (loop won't stop)
+  * apply a fix to a non-action field     -> test_block_targeting_source_field reddens
 """
 
 from __future__ import annotations
@@ -48,14 +49,26 @@ class RetryOutcome(BaseModel):
 def _apply_fix(action: ProposedAction, reason) -> ProposedAction:
     """Deterministically apply a BlockReason's fix: set the named field to the
     expected value. Raises ``UnfixableBlockError`` if the reason lacks a
-    ``field_to_change`` or ``expected`` (never silently no-op)."""
+    ``field_to_change`` or ``expected``, or names a field the caller cannot
+    change (never silently no-op)."""
     if reason is None or reason.field_to_change is None or reason.expected is None:
         raise UnfixableBlockError(
             f"Block reason is not machine-fixable: {getattr(reason, 'check', reason)!r}"
         )
     # v1 fixes only top-level proposed_action fields (e.g. proposed_action.amount).
-    attr = reason.field_to_change.split(".")[-1]
-    return action.model_copy(update={attr: reason.expected})
+    # Anything else (source fields, nested paths, unknown names) cannot converge
+    # by resubmitting, so it is unfixable — do not burn retries on it.
+    parts = reason.field_to_change.split(".")
+    if (
+        len(parts) != 2
+        or parts[0] != "proposed_action"
+        or parts[1] not in ProposedAction.model_fields
+    ):
+        raise UnfixableBlockError(
+            f"Block reason names a field the caller cannot change: "
+            f"{reason.field_to_change!r}"
+        )
+    return action.model_copy(update={parts[1]: reason.expected})
 
 
 def _resolution_for(decision: DecisionType) -> Resolution:

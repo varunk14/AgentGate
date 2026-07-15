@@ -80,6 +80,31 @@ def test_unfixable_block_escalates_to_human():
     assert outcome.final_decision.decision is DecisionType.block  # verdict NOT rewritten (D25)
 
 
+# --- block reason targets a field outside proposed_action -> unfixable -------
+def _wrong_target_block() -> Decision:
+    # A reason marked agent_fixable but pointing at the SOURCE, not the action.
+    # The caller cannot change the source, so resubmitting can never converge.
+    return Decision(
+        decision=DecisionType.block,
+        score=1,
+        checks=[Check(name="structural_arithmetic", type=CheckKind.critical, passed=False, detail="")],
+        reasons=[BlockReason(
+            check="structural_arithmetic", expected=m("1240.00"), received=m("1300.00"),
+            field_to_change="source.invoice", block_type=BlockType.agent_fixable,
+            message="source is inconsistent",
+        )],
+    )
+
+
+def test_block_targeting_source_field_is_unfixable():
+    outcome = run_with_retry(
+        make_invoice(), make_action(), decide_fn=_const_decision(_wrong_target_block())
+    )
+    assert outcome.resolution is Resolution.escalated_to_human
+    assert outcome.attempts == 1                        # no pointless resubmits
+    assert outcome.final_decision.decision is DecisionType.block  # verdict NOT rewritten (D25)
+
+
 # --- cap exhaustion: a persistent fixable BLOCK stops at the cap -------------
 def _persistent_fixable_block() -> Decision:
     return Decision(
