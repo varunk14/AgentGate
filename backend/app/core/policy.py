@@ -21,7 +21,6 @@ Hard rules honoured here:
 from __future__ import annotations
 
 from decimal import Decimal
-from enum import Enum
 from pathlib import Path
 from typing import Optional
 
@@ -38,15 +37,13 @@ class PolicyError(ValueError):
     policy stops the service starting; it never silently opens the gate."""
 
 
-class OnCapExhausted(str, Enum):
-    escalate = "escalate"  # v1 supports only fail-closed cap handling
-
-
 class RetryPolicy(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    # max_attempts is the only live retry knob. There is no on_cap_exhausted:
+    # cap exhaustion always routes to a human, hardcoded in retry.py (D28) — an
+    # inert config key is worse than none.
     max_attempts: int
-    on_cap_exhausted: OnCapExhausted = OnCapExhausted.escalate
 
 
 class Policy(BaseModel):
@@ -109,10 +106,7 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Policy:
             amount_greater_than=escalate_if.get("amount_greater_than"),
             score_below=escalate_if.get("score_below"),
             critical_checks=frozenset(raw.get("critical_checks") or ()),
-            retry=RetryPolicy(
-                max_attempts=retry.get("max_attempts"),
-                on_cap_exhausted=retry.get("on_cap_exhausted", "escalate"),
-            ),
+            retry=RetryPolicy(max_attempts=retry.get("max_attempts")),
         )
     except (ValidationError, ValueError) as exc:
         raise PolicyError(f"invalid policy: {exc}") from exc

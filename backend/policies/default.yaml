@@ -19,4 +19,7 @@ critical_checks:
 
 retry:
   max_attempts: 2              # agent_fixable blocks only; 1 initial + up to 2 retries = 3 submissions
-  on_cap_exhausted: escalate   # loop gives up -> route to a human (fail-closed)
+  # No on_cap_exhausted knob: cap exhaustion ALWAYS routes to a human, hardcoded
+  # in retry.py (fail-closed — the loop cannot fix it, so it neither retries
+  # forever nor approves). A key whose only other value was already ruled wrong
+  # would be inert config, worse than none (D28).

@@ -73,12 +73,18 @@ def _apply_fix(action: ProposedAction, reason) -> ProposedAction:
 
 def _resolution_for(decision: DecisionType) -> Resolution:
     """Map the final gate verdict to the loop's resolution (D25 — derived from the
-    verdict, never by mutating it)."""
+    verdict, never by mutating it).
+
+    Cap exhaustion (a still-BLOCK after the last resubmission) routes to a human,
+    unconditionally and by design — fail-closed: the loop cannot fix it, so it
+    neither retries forever nor approves. This is hardcoded, not a policy knob;
+    the only alternative (a dead-end BLOCK with no human routing) was ruled wrong
+    in the Slice 3 grill, so an on_cap_exhausted config key would be inert (D28)."""
     if decision is DecisionType.allow:
         return Resolution.allowed
     if decision is DecisionType.escalate:
         return Resolution.escalated_by_gate
-    return Resolution.escalated_to_human  # BLOCK the loop could not resolve
+    return Resolution.escalated_to_human  # BLOCK the loop could not resolve -> human
 
 
 def run_with_retry(

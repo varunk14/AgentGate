@@ -29,7 +29,7 @@ from app.core.schemas import (
 )
 
 _CRITICAL = "critical_checks:\n  - structural_arithmetic\n  - currency_match\n  - action_amount_matches_total\n"
-_RETRY = "retry:\n  max_attempts: 2\n  on_cap_exhausted: escalate\n"
+_RETRY = "retry:\n  max_attempts: 2\n"
 
 
 def m(value: str, currency: str = "USD") -> Money:
