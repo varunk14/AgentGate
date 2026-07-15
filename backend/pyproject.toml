@@ -1,0 +1,23 @@
+[project]
+name = "agentgate"
+version = "0.1.0"
+description = "Pre-action reliability gate for AI agents — verifies proposed actions against caller-supplied source evidence."
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+llm = ["litellm>=1.0"]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: real LLM-provider calls; run manually, never in CI",
+]
+addopts = "-m 'not live'"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

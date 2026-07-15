@@ -1,0 +1,27 @@
+ACME CORP
+123 Industrial Way, Springfield, IL 62704
+support@acme.example  |  Tax ID 55-1234567
+
+INVOICE
+
+Invoice #: INV-001
+Issue Date: 2026-01-15
+Due Date: 2026-02-14
+
+Bill To:
+  Widget Buyers LLC
+  987 Commerce Blvd, Rivertown, IL 60007
+
+--------------------------------------------------------------
+Description                 Qty    Unit Price        Amount
+--------------------------------------------------------------
+Widget A                      2      $100.00        $200.00
+Widget B                      5      $200.00      $1,000.00
+Shipping & Handling            -           -         $40.00
+--------------------------------------------------------------
+                                     Subtotal:     $1,240.00
+                                     Tax (0.0%):       $0.00
+                                     Total Due:     $1,240.00
+--------------------------------------------------------------
+
+Remit payment to Acme Corp within 30 days. Thank you for your business.

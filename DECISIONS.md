@@ -1,0 +1,123 @@
+# DECISIONS.md — AgentGate design decisions and their reasoning
+This file records the design judgment behind AgentGate. It is a first-class artifact: a reader should finish it thinking "this person knows exactly what they built, and where the value stops." Each entry states the **decision**, the **reasoning**, and the **honest boundary/limitation**. Decisions come from a deep design review; the product spec defines what to build, this file is the *why*.
+
+---
+
+## 0. Threat model (read this before anything else)
+
+> **AgentGate is an agent-reliability gate, not a security/trust gate.** v1 catches an **honest-but-fallible agent's mistakes** — arithmetic slips, decimal errors, LLM misreads, duplicates — at the moment of the write, and returns a machine-readable reason the agent can fix against. It does **NOT** defend against an **adversarial agent that forges its own evidence**, and it does **NOT** detect fraud or bad business judgment. Passing AgentGate means "the action is consistent with the evidence provided," never "the payment is correct or authorized."
+
+**Reasoning.** Every AgentGate answer leans on the word *source*. If the untrusted agent supplies both the proposed action and the evidence, and we trust that evidence, the gate is theater. Being explicit about this is what makes the rest of the repo credible to a threat-modeling reader — the same fact framed honestly reads as "knows what they built," not "caught overselling."
+
+**Boundary.** v1's honesty is precisely this scoping. The adversarial case is not solved; it is a named milestone (D5). Fraud and business-judgment are permanently out of scope — that is what ESCALATE plus a retained human reviewer are for.
+
+---
+
+## D1 — Money is `Decimal`, never float
+**Decision.** All money is Python `Decimal` parsed from the source **as a string** (or integer cents). Never float. The `$0.01` arithmetic tolerance is reserved for real vendor rounding, never for masking float error.
+**Reasoning.** `0.1 + 0.2 != 0.3` in floats. A "trustworthy deterministic core" built on floats would generate its own rounding lies and quietly break the exact trust the product claims. This is the one place a sloppy type choice undermines everything, so it is `Decimal` from the first line. `Decimal("1240") == Decimal("1240.00")` is `True`, which also makes grounding (D10) clean.
+**Boundary.** Requires disciplined parsing (string → Decimal) at every ingestion point; a single `float()` in the path reintroduces the bug.
+
+## D2/D16 — Scoring: no self-reported confidence; confidence = grounding coverage
+**Decision.** `score = (soft-check pass ratio) × (fields grounded / fields total)`. For a structured source with no LLM in the path, grounding = 1.0. Critical checks are **not** in the score — they are a separate hard gate. **No self-reported LLM confidence is used anywhere.**
+**Reasoning.** An LLM emitting "I'm 0.97 confident" is uncalibrated theater — it will say that while hallucinating, so letting it multiply a trust score is a fabricated number. The only honestly *earned* confidence is grounding coverage: the fraction of extracted fields that literally verify against the source. So confidence is not a separate input — it **is** the grounding result. Every factor in the score is measured against something external; nothing is self-reported. This also makes the `score_below` policy knob (D3/§8) a live, meaningful control rather than a dead one.
+**Boundary.** The score reflects *how much was grounded*, not *whether the invoice is truthful*. Full grounding coverage on a doctored source still yields a high score (see D5).
+
+## D3 — Decision precedence: BLOCK > ESCALATE > ALLOW
+**Decision.** Any critical check failure **short-circuits to BLOCK** before escalation is evaluated. ESCALATE applies only to actions that passed all critical checks.
+**Reasoning.** BLOCK is provably-wrong-and-machine-fixable — cheap, instant, and it feeds the agent's retry loop. ESCALATE is plausibly-right-but-risky — expensive human time. If a provably-broken invoice escalated, we'd burn a human on something the agent could self-correct, and the compiler-error retry loop (the whole point) would never fire.
+**Boundary.** Correct routing depends on correctly classifying each check as critical vs soft; a miscategorized check sends work to the wrong lane.
+
+## D4/D10 — Grounding semantics: literal presence, matched on parsed Decimal
+**Decision.** Grounding checks that the claimed number **literally appears in the caller-supplied `raw_text`**, matched on the **parsed Decimal value** (not the raw string), at **token level, not substring** (see D21): tokenize money-shaped values, parse each to Decimal, compare Decimals. It catches extractor hallucination and honest mistakes — not source integrity.
+**Reasoning.** The LLM may emit `1240`, `1,240.00`, `$1,240.00`, or `1240.0` while the source says `1,240.00`. All parse to exactly one Decimal with no information lost — a lossless canonical form (see D8's principle). So matching on Decimal value is still fully deterministic. Grounding defends against *our own extractor*, confirming the number is present in the document rather than invented.
+**Boundary.** Because `raw_text` is caller-supplied (D5), grounding proves the number matches the text the agent handed us — not that the text is genuine. A hostile caller submitting doctored `raw_text` plus a matching action passes grounding.
+
+## D5 — Trust anchor: v1 caller-supplied; independent fetch is the milestone
+**Decision.** v1 accepts caller-supplied `source` (invoice, raw_text, po) via the API — it verifies **consistency of what it is given** and does **not** independently fetch the source. The named upgrade: **independent source fetch from a system of record (ERP/accounting/ledger), keyed by an identifier the agent provides** — the agent chooses *which* invoice, never *what it says*.
+**Reasoning.** The honest scoping of the whole product. If AgentGate trusted an agent-supplied document body it would be pointless against an adversary; being explicit converts an overclaim into a credible, staged roadmap. The milestone is what upgrades "consistent with what it's given" → "checked against a source the agent can't control."
+**Boundary.** v1 is defenseless against forged evidence, by construction. This is stated at the top of the README and this file — a deliberate boundary, not a hidden gap.
+
+## D6 — Eval built to embarrass, reported honestly
+**Decision.** The metric is **not** "block-accuracy." Report a confusion matrix as **precision, recall, and false-positive rate separately**. The dataset must include (a) **false-positive traps** — legit invoices with valid-but-unusual features (rounding lines, alternate vendor spelling, multi-currency, credit-note-like) that a naive check would wrongly BLOCK; (b) **out-of-scope cases** — consistent-but-actually-wrong invoices (double-bills, unauthorized spend) labeled as known misses; (c) honest-agent errors it does catch.
+**Reasoning.** A dataset the author writes to match their own checks trivially reports ~100% and is theater. A false-BLOCK on a legit invoice is the exact failure that destroys trust in production, so it must be measured. Reporting real numbers below a clean 0.9, plus near-zero recall on out-of-scope cases *by design*, is more credible than a rigged 100%.
+**Boundary.** The honest numbers will look worse than a rigged benchmark; that trade is intentional.
+
+## D7 — Block payload is compiler-grade and typed
+**Decision.** A BLOCK returns a structured, machine-readable reason: `check`, `expected`, `received`, `field_to_change`, `message`. Two block types: **`agent_fixable`** (action misread a valid source → agent may retry, capped at 2) and **`source_invalid`** (the source itself is internally inconsistent → do NOT retry, route straight to ESCALATE). The retry loop terminates on fix, on cap, or immediately on a source-invalid block.
+**Reasoning.** "Structured reason" is only useful if it is mechanically actionable — like a compiler, it must say *what* and *where* ("set `proposed_action.amount` to 1240.00"), not just "wrong." Otherwise the agent re-rolls the dice and the compiler-error analogy is dead. And some blocks are unfixable by the agent because the *source* is wrong, not the action; resubmitting forever would never converge, so those must escalate immediately.
+**Boundary.** The retry cap (2) is a deliberate ceiling; a genuinely fixable action that needs 3 tries will escalate. Distinguishing agent-fixable from source-invalid requires the arithmetic checks (D15) to attribute the inconsistency correctly.
+
+## D8 — Vendor matching: cosmetic-normalize (deterministic) vs entity-diff (escalate)
+**Decision.** Cosmetic normalization only — case, whitespace, trailing punctuation — is deterministic and allowed (exact match after it). Entity-level differences ("Acme Corp" vs "Acme Corp Holdings" vs "Acme Corp LLC") are **never** auto-normalized. Anything not an exact match after cosmetic normalization is a **soft failure that ESCALATES**, never an automatic allow or block.
+**Reasoning.** Too strict → false-BLOCK a legit vendor (the trust-killing false positive). Too loose → ALLOW payment to a different legal entity (a real diversion vector). So we refuse to be either: cosmetic exact-match stays in the deterministic core; fuzzy entity matching lives explicitly as an escalation trigger, not a hidden judgment smuggled inside a "deterministic" check.
+**Boundary.** Legitimate vendor-name variations (a genuine rename, a d/b/a) will escalate to a human rather than auto-pass. That is the intended cost of not guessing entity identity.
+
+**Principle (D8 + D10).** *Canonicalize only when the transform is lossless and unambiguous* (all number formats → one Decimal). *Escalate when it would require discarding meaningful information* (entity identity). Number-for-grounding is the former; vendor-fuzzy is the latter — same rule, correctly applied, not a double standard.
+
+## D9 — Test seam: the router is the only mock
+**Decision.** The LLM lives behind `llm_router.py`; **that interface is the only thing mocked**. Each LLM step is split into the call (behind the router) and the logic that processes its output. Tests inject stubbed raw LLM outputs (including messy/malformed) and run the real grounding/decision logic **unmocked**. 1–2 real-call tests stay behind a `live` marker, run manually, never in CI.
+**Reasoning.** The mock replaces the network call, never our logic — so a bug in parsing, grounding, or the decision cannot hide behind it; that code always runs for real. CI stays fast, free, and deterministic, and can't be broken by a Gemini rate-limit mid-run. The live-marked tests confirm the real provider still behaves, occasionally and by hand.
+**Boundary.** CI never exercises the real provider, so provider-contract drift (a model changing its output shape) is only caught when the live tests are run manually.
+
+## D11 — Fail-closed + provider abstraction
+**Decision.** The router forces every provider through a lowest-common-denominator contract: **text in → JSON out, validated by us with Pydantic**, never trusting native JSON mode or function-calling; provider-specific glue is centralized in the router (that is what makes the "one-line swap to paid" claim honest). On any failure — malformed JSON, rate-limit, timeout, extraction failure — AgentGate **never crashes and never ALLOWs**: it surfaces a **typed error** that the decision layer converts to **ESCALATE**. *If it can't verify, it doesn't approve.*
+**Reasoning.** A "verification gate" that crashes or silently allows when its own LLM hiccups isn't a gate. Failing safe-to-human is a core behavior, not an afterthought. Centralizing glue keeps business logic model-agnostic and the swap genuinely one line elsewhere.
+**Boundary.** The LCD contract means we deliberately forgo provider-specific niceties (native structured output) in favor of our own validation. Frequent LLM failures degrade gracefully to more human escalations, not to throughput.
+
+## D12 — Currency is first-class and critical
+**Decision.** Money is `{value, currency}` on both invoice amounts and the proposed action. `action.currency == invoice.currency` is a **critical** check, exact, with no conversion. Currency mismatch, or **dual-amount ambiguity** (an invoice printing both a foreign and a converted local amount), → **ESCALATE**. v1 does not perform or verify FX conversion.
+**Reasoning.** Without currency in the checks, AgentGate would wrongly ALLOW paying 1,240 USD against a 1,240 EUR invoice — a real bug. We don't guess which of two printed amounts is "the total"; ambiguity means "can't verify," which fails closed to escalate (D11), never allow.
+**Boundary.** Any genuinely multi-currency or FX-converted invoice escalates in v1; automated FX verification is out of scope.
+
+## D13/D17 — Amount-vs-total: exact match ALLOWs; any difference ESCALATES (adjustments deferred)
+**Decision.** `action.amount == invoice.total` exactly → eligible for ALLOW. **Any** difference — withholding tax, early-pay discount, partial/installment — declared or not → **ESCALATE**, not BLOCK. Adjustment verification (grounding each adjustment) is a **named later milestone**, not v1.
+**Reasoning.** `action.amount == invoice.total` is wrong for real finance: a $1,000 invoice with 10% withholding correctly remits $900; discounts and installments likewise make the correct payment differ from the total. Blocking those is the trust-killing false positive. But building a grounded verifier for every adjustment type is real multi-case work that doesn't prove the thesis any harder than the base case. So v1 escalates the difference (fail-closed — it may be legitimate but is unverifiable now) rather than blocking a possibly-correct payment or faking coverage.
+**Boundary.** Every legitimately-adjusted payment escalates to a human in v1. Stated in the README as a deliberate boundary. Closed later by the adjustment-verification milestone.
+
+## D14/D18 — Credit notes out of scope for v1
+**Decision.** Credit notes (negative totals) are **out of scope for v1**, documented as a limitation. Either grow `action_type` later or keep them out.
+**Reasoning.** Decided by thesis-value, not completeness. If a credit note is "approve a negative amount," it exercises the same machinery and proves nothing new about "does the action agree with the evidence." If it needs different logic (matching a credit to an original invoice), that's domain scope creep that still adds no thesis proof. Forcing them through `approve_payment` would be a modeling error.
+**Boundary.** No credit-note handling ships in v1; it lives in documented limitations.
+
+## D15 — Structure-aware arithmetic (survives real invoices)
+**Decision.** Replace naive `sum(line_items) == subtotal` and `subtotal + tax == total` with a structure-aware check: **`(Σ charge lines incl. shipping − Σ typed discount lines + Σ tax summed across multiple rates) == total`** (within `$0.01` for real vendor rounding). Line items carry a `kind` (charge | discount | shipping | tax). Exotic formats (complex multi-page, unusual regional tax, bundled/prorated) → ESCALATE, documented.
+**Reasoning.** A normal real invoice has a discount line, shipping, and two VAT rates — which false-BLOCK the naive checks, making the tool useless in production. Widening the check to reflect real invoice structure keeps it fully deterministic *and* true on real inputs. The principle throughout: widen the check enough to be true on real inputs, escalate what you can't verify, never fake coverage or force-check.
+**Boundary.** Invoices whose structure the check doesn't model escalate rather than being force-checked; correctly attributing a mismatch to `source_invalid` (D7) depends on this check.
+
+## D19 — Slice 1 emits a grounding result, not a decision
+**Decision.** The Slice 1 skeleton does **not** emit `allow | block | escalate`. Its output is a grounding result: **`grounded | not_grounded | ungroundable`**. It means "the number appears in the source," never "the payment is correct." The real decision arrives in Slice 2 once the deterministic checks exist.
+**Reasoning.** In Slice 1 there is grounding but no arithmetic checks, so a green ALLOW there could be a payment Slice 2 would BLOCK — it would falsely signal "verified" when only "grounded" is true. Labeling the output as grounding-only keeps the walking skeleton honest: it proves the extract→ground→decide pipeline runs end to end without masquerading as a trustworthy approval.
+**Boundary.** Slice 1 makes no correctness claim about the payment; it is a disposable skeleton whose job is to de-risk the hard path (extraction + grounding on a messy source), not to approve anything.
+
+## D20 — North-star: general gate for all agents (DEFERRED to post-v1)
+**Decision.** AgentGate's true intent is a **general pre-action verification gate for any agent**, not an invoice tool — the name is *Agent*Gate, and invoices are only the demo domain. The target architecture is a **domain-agnostic engine** (grounding, decision + precedence, scoring, fail-closed, BlockReason + retry contract, LLM router, REST/MCP interface — none of which know about invoices) plus **pluggable domain "packs"** (concrete schemas + deterministic checks). Invoices are the first, deep **reference pack**; a thin second pack (e.g. a refund/order bot: amount ≤ order total, currency match, not-already-refunded) later **proves** the seam is real. **This is DEFERRED: v1 builds the invoice vertical first and only generalizes once it works end-to-end.**
+**Reasoning.** "Works for all agents" is earned by depth in one real domain plus a visible seam — not by an abstract framework that credibly verifies nothing (the Pydantic-validation objection). The universal primitive is **grounding** ("does a claimed value literally appear in the source evidence?"), which is domain-independent; domain packs add structural checks on top. Building the engine general *in interface* costs almost nothing (mostly: don't import invoice types into engine logic); building it deep up front would be over-engineering and would delay the thesis proof. So we prove invoices first, then add a second pack as the generality proof.
+**Boundary.** v1 ships invoice-only in behavior. Generality is a documented direction, not a v1 claim. Coding hygiene during v1: keep grounding/decision/scoring free of invoice-specific imports where free, so the later engine/pack split is a re-shelving, not a rewrite.
+
+## D21 — Grounding is token-level money-value matching, not substring
+**Decision.** Grounding tokenizes `raw_text` for **money-shaped values** (optional currency symbol, thousands separators, decimal places) with boundaries, parses each candidate to `Decimal`, and compares Decimals. It does **not** do substring presence. So `INV-31240`, a date `12/40`, or `$11,240.00` never yield a spurious `1240`.
+**Reasoning.** A substring scan grounds `1240` inside `INV-31240` and manufactures confidence for a number that was never the total — worse than no grounding, because the score (D2/D16) then multiplies trust by a false signal. Token-level Decimal matching removes that class of false positive while staying fully deterministic (the lossless-canonical principle, D8/D10).
+**Boundary.** Even token-level matching proves "this value exists as a monetary value somewhere in the source," **not** "this value is the total" — necessary, not sufficient. That is exactly why the deterministic arithmetic check (D15) sits alongside grounding rather than grounding standing alone. Guard test: `raw_text` with `INV-31240`, `12/40`, `$11,240.00` and no real `1240.00`, claimed total `1240.00`, must return `not_grounded`; a substring matcher fails it immediately.
+
+## D22 — Tests must have teeth (mutation-checked, real messiness)
+**Decision.** Test inputs are not hand-picked to pass. Canned router outputs reproduce **real LLM messiness** (markdown-fenced JSON, chatty preamble, trailing commas, string-vs-int values, null fields, truncated JSON); grounding fixtures use realistic invoice text. Every test is written **red-first** (watched to fail for the right reason) and the suite is **mutation-checked**: a plausible wrong implementation (grounding hard-coded to `true`, or Decimal-equality swapped for substring) MUST turn at least one test red.
+**Reasoning.** A test where the author controls both sides only proves equality works. A suite in which no plausible wrong implementation reddens anything is decorative — it manufactures confidence exactly like the substring grounding it fails to catch. Red-first plus mutation is what converts "4 passed" from a checkmark into evidence.
+**Boundary.** Nothing fully tests the tests; this is why the Slice 4 eval harness exists as an independent signal on data the checks were not designed around. Mutation testing here is applied by judgment, not an automated mutation tool, in v1.
+
+## D23 — "Never weaken a test" made enforceable via the spec
+**Decision.** When a test goes red, resolve it against the **spec, not taste**. If the expected value follows from the spec → the code is wrong, fix the code. If the expected value contradicts the spec → the test is wrong, fix the test **and cite the specific spec line in the commit message**. If the spec is silent or ambiguous → stop, resolve with the human, update the spec first, then fix whatever now disagrees. A test edit with **no spec citation is the smell**.
+**Reasoning.** "Fix the code" and "fix the test" both end in green, so "never weaken a test" is unenforceable without an external tiebreaker. Making the spec the arbiter, and requiring a citation on any test-expectation change, turns weakening from an invisible judgment call into a reviewable, visible act.
+**Boundary.** Relies on the spec being kept current. A stale spec makes the arbiter wrong; that is why spec updates precede behavior changes.
+
+## D24 — Full-suite regression on every commit
+**Decision.** The gate for Slice N is "**all tests, Slices 1..N, green**," enforced by CI on every commit — not just the current slice's tests.
+**Reasoning.** Running only the current slice's tests means "each slice works" holds only on the day it was built; the next slice can silently invalidate it (a house of cards). A later slice reddening an earlier test is the discipline working — a real regression caught — and D23 then decides whether the code is wrong or the spec changed.
+**Boundary.** Affordable precisely because CI is fully stubbed and deterministic (D9): no live LLM calls, no rate limits, so running everything every time stays fast and free. Live-marked real-provider tests remain outside CI.
+
+---
+
+## Roadmap re-sequence (risk-first, thesis-first)
+**Decision.** Replace the naive bottom-up MVP order with 8 slices, each with one test gate: (1) thin end-to-end skeleton with a grounding-only result; (2) deterministic checks + block-with-reason; (3) crude retry-loop demo; (4) honest eval; (5) policy engine; (6) LangGraph agent + HITL; (7) dashboard + deploy; (8) MCP + packaging.
+**Reasoning.** The credibility of the project lives in grounding and the honest eval, and the hero feature is the compiler-error retry loop — all of which the old order buried behind scaffolding and surface. The genuine risk is whether extraction + grounding can get a trustworthy number out of a messy real source; that must be de-risked on day one via a thin walking skeleton, not after two slices of plumbing. So the thesis-proving and risky work moves to the front; policy, agent, dashboard, and MCP move behind it. Each slice keeps exactly one isolated, falsifiable test gate, preserving the test-gate discipline.
+**Boundary.** Slices 1–3 deliberately ship crude, disposable versions (grounding-only decision, scripted retry) ahead of their polished counterparts; the hardened agent/HITL, dashboard, and packaging come later by design.
