@@ -10,7 +10,8 @@ dependencies = [
 
 [project.optional-dependencies]
 llm = ["litellm>=1.0"]
-dev = ["pytest>=8"]
+agent = ["langgraph>=0.2"]
+dev = ["pytest>=8", "langgraph>=0.2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
