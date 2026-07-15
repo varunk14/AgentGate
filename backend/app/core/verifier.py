@@ -61,6 +61,27 @@ def check_structural_arithmetic(invoice: Invoice) -> CheckOutcome:
     name = "structural_arithmetic"
     cur = invoice.currency
 
+    if not invoice.line_items and not invoice.tax_lines:
+        # A total-only invoice is UNVERIFIABLE, not inconsistent: there is
+        # nothing to check the stated total against. Escalate with no
+        # block_type — source_invalid would wrongly tell a human the vendor's
+        # document is broken (D15 boundary).
+        return CheckOutcome(
+            check=Check(
+                name=name, type=CheckKind.critical, passed=False,
+                detail="no line items or tax lines to verify against the total",
+            ),
+            route=Route.escalate,
+            reason=BlockReason(
+                check=name,
+                message=(
+                    f"Invoice {invoice.invoice_number} has no line items or tax "
+                    "lines; the stated total cannot be verified against the "
+                    "invoice structure. Route to a human."
+                ),
+            ),
+        )
+
     charges = Decimal("0")
     discounts = Decimal("0")
     tax = Decimal("0")

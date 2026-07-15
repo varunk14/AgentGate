@@ -126,6 +126,16 @@ def test_arithmetic_handles_discount_shipping_and_tax():
     assert decision.decision is DecisionType.allow
 
 
+def test_no_line_items_escalates_as_unverifiable():
+    # A total-only invoice (no line items, no tax lines) is UNVERIFIABLE, not
+    # internally inconsistent: escalate with no block_type, never source_invalid.
+    decision = decide(make_invoice(total="199.00", line_items=[]), make_action(amount="199.00"))
+    assert decision.decision is DecisionType.escalate
+    r = next(r for r in decision.reasons if r.check == "structural_arithmetic")
+    assert r.block_type is None
+    assert "no line items" in r.message
+
+
 def test_arithmetic_tolerance_one_cent():
     # sum 1240.00 vs total 1240.01 is within the $0.01 vendor-rounding tolerance.
     decision = decide(make_invoice(total="1240.01"), make_action(amount="1240.01"))
