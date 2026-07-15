@@ -7,11 +7,30 @@ rounding lies and would break the trustworthy deterministic core.
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# Caller-text bounds (PRD SS6, D34): generous ceilings, applied uniformly —
+# every wire-model string flows verbatim into the Decision echo
+# (proposed_action), check detail/message strings, Langfuse traces, and the
+# dashboard, so every one is bounded. Numeric strings are capped BEFORE the
+# Decimal parse: a million-digit "amount" is an arithmetic/rendering DoS, and
+# an uncapped value would ride validator messages into traces. Above a bound,
+# validation fails and the request fail-closes to ESCALATE — over-rejection is
+# the fail-closed direction.
+MAX_IDENTIFIER_LENGTH = 100
+MAX_VENDOR_LENGTH = 200
+MAX_DATE_LENGTH = 50
+MAX_CURRENCY_LENGTH = 10
+MAX_DESCRIPTION_LENGTH = 500
+MAX_RATIONALE_LENGTH = 2000
+MAX_ADJUSTMENTS = 20
+MAX_ADJUSTMENT_CHARS = 500
+MAX_NUMERIC_CHARS = 50
 
 
 def _normalized_identifier(v: object, field_name: str) -> str:
@@ -29,6 +48,24 @@ def _normalized_identifier(v: object, field_name: str) -> str:
         raise ValueError(
             f"{field_name} must be a non-empty identifier "
             "(min length 1 after stripping surrounding whitespace)."
+        )
+    if len(v) > MAX_IDENTIFIER_LENGTH:
+        raise ValueError(
+            f"{field_name} is too long ({len(v)} characters, "
+            f"max {MAX_IDENTIFIER_LENGTH})."
+        )
+    return v
+
+
+def _normalized_currency(v: str) -> str:
+    """Shared by ``Money.currency`` and ``Invoice.currency`` — the two are
+    compared by ``currency_match``, so they get identical treatment (D12/D34)."""
+    v = v.strip()
+    if not v:
+        raise ValueError("currency is required and must be non-empty.")
+    if len(v) > MAX_CURRENCY_LENGTH:
+        raise ValueError(
+            f"currency is too long ({len(v)} characters, max {MAX_CURRENCY_LENGTH})."
         )
     return v
 
@@ -59,8 +96,16 @@ class Money(BaseModel):
                 "(float introduces rounding error; see DECISIONS D1)."
             )
         if isinstance(v, str):
+            v = v.strip()
+            if len(v) > MAX_NUMERIC_CHARS:
+                # Report the length, never the value — this message can end up
+                # in a fail-closed reason (D34).
+                raise ValueError(
+                    f"Money.value string is too long ({len(v)} characters, "
+                    f"max {MAX_NUMERIC_CHARS})."
+                )
             try:
-                return Decimal(v.strip())
+                return Decimal(v)
             except (InvalidOperation, ValueError) as exc:
                 raise ValueError(f"Money.value is not a valid decimal: {v!r}") from exc
         if isinstance(v, int):
@@ -70,10 +115,7 @@ class Money(BaseModel):
     @field_validator("currency")
     @classmethod
     def _currency_present(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("currency is required and must be non-empty.")
-        return v
+        return _normalized_currency(v)
 
 
 class LineItemKind(str, Enum):
@@ -84,7 +126,7 @@ class LineItemKind(str, Enum):
 
 
 class LineItem(BaseModel):
-    description: str
+    description: str = Field(max_length=MAX_DESCRIPTION_LENGTH)
     quantity: Decimal
     unit_price: Money
     amount: Money
@@ -102,8 +144,14 @@ class LineItem(BaseModel):
         if isinstance(v, float):
             raise ValueError("quantity must be a string or int, never float (D1).")
         if isinstance(v, str):
+            v = v.strip()
+            if len(v) > MAX_NUMERIC_CHARS:
+                raise ValueError(
+                    f"quantity string is too long ({len(v)} characters, "
+                    f"max {MAX_NUMERIC_CHARS})."
+                )
             try:
-                return Decimal(v.strip())
+                return Decimal(v)
             except (InvalidOperation, ValueError) as exc:
                 raise ValueError(f"quantity is not a valid decimal: {v!r}") from exc
         return v
@@ -119,14 +167,26 @@ class TaxLine(BaseModel):
         if isinstance(v, float):
             raise ValueError("tax rate must be a string, never float (D1).")
         if isinstance(v, str):
-            return Decimal(v.strip())
+            v = v.strip()
+            if len(v) > MAX_NUMERIC_CHARS:
+                raise ValueError(
+                    f"tax rate string is too long ({len(v)} characters, "
+                    f"max {MAX_NUMERIC_CHARS})."
+                )
+            try:
+                return Decimal(v)
+            except (InvalidOperation, ValueError) as exc:
+                # Without this catch a junk rate escapes model_validate as a
+                # raw InvalidOperation, bypassing an `except ValidationError`
+                # fail-closed catch at the API boundary (D34).
+                raise ValueError(f"tax rate is not a valid decimal: {v!r}") from exc
         return v
 
 
 class Invoice(BaseModel):
     invoice_number: str
-    vendor: str
-    date: str
+    vendor: str = Field(max_length=MAX_VENDOR_LENGTH)
+    date: str = Field(max_length=MAX_DATE_LENGTH)
     currency: str
     line_items: list[LineItem] = []
     subtotal: Optional[Money] = None
@@ -137,6 +197,11 @@ class Invoice(BaseModel):
     @classmethod
     def _normalize_invoice_number(cls, v: str) -> str:
         return _normalized_identifier(v, "invoice_number")
+
+    @field_validator("currency")
+    @classmethod
+    def _normalize_currency(cls, v: str) -> str:
+        return _normalized_currency(v)
 
 
 class ActionType(str, Enum):
@@ -152,14 +217,35 @@ class ProposedAction(BaseModel):
     action_type: ActionType
     invoice_number: str
     amount: Money
-    vendor: str
+    vendor: str = Field(max_length=MAX_VENDOR_LENGTH)
     adjustments: list = []
-    agent_rationale: str = ""
+    agent_rationale: str = Field(default="", max_length=MAX_RATIONALE_LENGTH)
 
     @field_validator("invoice_number")
     @classmethod
     def _normalize_invoice_number(cls, v: str) -> str:
         return _normalized_identifier(v, "invoice_number")
+
+    @field_validator("adjustments")
+    @classmethod
+    def _bounded_adjustments(cls, v: list) -> list:
+        """Adjustments are declared, unverified labels (D13) echoed verbatim in
+        the Decision, so bound their count and per-item serialized size while
+        staying shape-agnostic — typing them now would speculate on the deferred
+        adjustment-verification milestone (D34)."""
+        if len(v) > MAX_ADJUSTMENTS:
+            raise ValueError(f"adjustments has {len(v)} items (max {MAX_ADJUSTMENTS}).")
+        for i, item in enumerate(v):
+            try:
+                encoded = json.dumps(item)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"adjustments[{i}] is not JSON-serializable.") from exc
+            if len(encoded) > MAX_ADJUSTMENT_CHARS:
+                raise ValueError(
+                    f"adjustments[{i}] serializes to {len(encoded)} characters "
+                    f"(max {MAX_ADJUSTMENT_CHARS})."
+                )
+        return v
 
 
 class CheckKind(str, Enum):

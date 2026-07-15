@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 from enum import Enum
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .extractor import ExtractionError, extract_total
 from .grounding import is_grounded
@@ -243,3 +243,81 @@ def _evidence(invoice: Invoice, raw_text: Optional[str]) -> list[str]:
     if raw_text is not None:
         evidence.append("raw_text")
     return evidence
+
+
+# --- Fail-closed factory (PRD SS9, D34) ----------------------------------------
+
+FAIL_CLOSED_CHECK = "fail_closed"
+_MAX_DETAILS_PER_ERROR = 5
+_MAX_DETAIL_CHARS = 200
+_MAX_ERROR_CHARS = 300
+_TRUNCATION_MARK = "…[truncated]"
+
+
+def _truncated(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + _TRUNCATION_MARK
+
+
+def _formatted_error(error: Exception | str) -> str:
+    """One bounded, human-actionable line per input error.
+
+    ValidationErrors are formatted from field locations and pydantic messages
+    only (``include_input=False`` — never the raw input value), capped at
+    ``_MAX_DETAILS_PER_ERROR`` details of ``_MAX_DETAIL_CHARS`` each with a
+    "+N more" tail; anything else is stringified and capped. The cap is
+    load-bearing, not cosmetic: schema validators interpolate the offending
+    value into their message, so an unbounded junk field would otherwise ride
+    the error text into Langfuse and the dashboard (D34).
+    """
+    if isinstance(error, ValidationError):
+        errs = error.errors(include_url=False, include_input=False)
+        details = []
+        for err in errs[:_MAX_DETAILS_PER_ERROR]:
+            loc = ".".join(str(part) for part in err["loc"]) or "(body)"
+            details.append(_truncated(f"{loc}: {err['msg']}", _MAX_DETAIL_CHARS))
+        remaining = len(errs) - _MAX_DETAILS_PER_ERROR
+        if remaining > 0:
+            details.append(f"and {remaining} more validation errors")
+        return f"{error.title} failed validation: " + "; ".join(details)
+    if isinstance(error, str):
+        return _truncated(error, _MAX_ERROR_CHARS)
+    return _truncated(f"{type(error).__name__}: {error}", _MAX_ERROR_CHARS)
+
+
+def fail_closed_decision(errors: Sequence[Exception | str]) -> Decision:
+    """A valid ESCALATE Decision for input that could not be parsed or verified.
+
+    The API boundary catches its errors (ValidationError, extraction/router
+    failure, undecodable body) and calls this instead of crashing — fail closed,
+    never a 5xx, never ALLOW (PRD SS9, D34). Pure: no HTTP, no I/O.
+
+    The shape is fixed: ``score`` None (nothing was measured, D32); ``checks``
+    and ``evidence_used`` empty (no check ran, nothing was verified — a
+    synthetic check row would claim otherwise); ``proposed_action`` None (there
+    is no VALIDATED action to echo). One ``fail_closed`` reason per error with
+    ``block_type``/``field_to_change``/``expected`` all None: not agent-fixable
+    (nothing mechanical to fix) and not source_invalid (the source is
+    unreadable, not proven inconsistent).
+
+    ``errors`` must be non-empty — a reason-less fail-closed Decision would be
+    an unexplained escalate, which is a bug at the caller, so raise loud.
+    """
+    if not errors:
+        raise ValueError("fail_closed_decision requires at least one error.")
+    reasons = [
+        BlockReason(
+            check=FAIL_CLOSED_CHECK,
+            message=f"{_formatted_error(error).rstrip('.')}. Route to a human.",
+        )
+        for error in errors
+    ]
+    return Decision(
+        decision=DecisionType.escalate,
+        score=None,
+        checks=[],
+        reasons=reasons,
+        evidence_used=[],
+        proposed_action=None,
+    )
