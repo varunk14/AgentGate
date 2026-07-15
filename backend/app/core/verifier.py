@@ -271,10 +271,83 @@ def check_duplicate(invoice: Invoice, is_duplicate: bool) -> CheckOutcome:
     )
 
 
+# --- Frame stage (D31) -------------------------------------------------------
+# The content checks above verify one thing: an approve_payment action against
+# the invoice it names. The frame checks below confirm the action IS that thing
+# before those checks run. Both are critical and ESCALATE on failure — never
+# agent_fixable: a frame mismatch has two opposite fixes (right action / wrong
+# evidence attached, vs right evidence / typo'd action) and AgentGate cannot tell
+# which, so it fails BLOCK's criterion (D3). expected/field_to_change/block_type
+# stay None (structurally unfixable); the human-facing comparison is in message.
+
+
+def check_action_type_supported(action: ProposedAction) -> CheckOutcome:
+    """Frame check: v1 verifies ``approve_payment`` only. ``flag``/``reject`` are
+    out of frame (unsupported, not malformed) → ESCALATE."""
+    name = "action_type_supported"
+    if action.action_type == ActionType.approve_payment:
+        return _ok(name, CheckKind.critical, f"action_type {action.action_type.value} is verifiable in v1")
+    return CheckOutcome(
+        check=Check(
+            name=name, type=CheckKind.critical, passed=False,
+            detail=f"action_type {action.action_type.value} is out of frame (v1 verifies approve_payment only)",
+        ),
+        route=Route.escalate,
+        reason=BlockReason(
+            check=name,
+            received=action.action_type.value,
+            message=(
+                f"Action type {action.action_type.value!r} is out of frame: AgentGate v1 "
+                "verifies payment approvals only, not flags or rejections. Route to a human."
+            ),
+        ),
+    )
+
+
+def check_invoice_number_match(invoice: Invoice, action: ProposedAction) -> CheckOutcome:
+    """Frame check: the action must reference the invoice it is being checked
+    against. Exact match on values already whitespace-normalized at the schema
+    boundary (§6/D8). Mismatch → ESCALATE (not agent_fixable, D31)."""
+    name = "invoice_number_match"
+    if action.invoice_number == invoice.invoice_number:
+        return _ok(name, CheckKind.critical, f"action references invoice {invoice.invoice_number}")
+    return CheckOutcome(
+        check=Check(
+            name=name, type=CheckKind.critical, passed=False,
+            detail=f"action {action.invoice_number!r} != invoice {invoice.invoice_number!r}",
+        ),
+        route=Route.escalate,
+        reason=BlockReason(
+            check=name,
+            received=action.invoice_number,
+            message=(
+                f"Action references invoice {action.invoice_number!r} but the attached "
+                f"invoice is {invoice.invoice_number!r}. AgentGate cannot tell whether the "
+                "wrong evidence was attached or the action's number is a typo; route to a human."
+            ),
+        ),
+    )
+
+
+def run_frame_checks(invoice: Invoice, action: ProposedAction) -> list[CheckOutcome]:
+    """Run the frame stage (D31). ALWAYS returns both rows — no internal short-
+    circuit — so a doubly-wrong action shows both, and ``critical_check_names()``
+    (which unions this with ``run_checks``) cannot be truncated. The short-circuit
+    (skip content checks on a frame failure) lives in ``decide()``, not here."""
+    return [
+        check_action_type_supported(action),
+        check_invoice_number_match(invoice, action),
+    ]
+
+
 def run_checks(
     invoice: Invoice, action: ProposedAction, *, is_duplicate: bool = False
 ) -> list[CheckOutcome]:
-    """Run all deterministic checks in order and return their outcomes."""
+    """Run all deterministic content checks in order and return their outcomes.
+
+    The frame stage (``run_frame_checks``) runs before these in ``decide()``; a
+    frame failure suppresses this stage entirely (checks run on non-comparable
+    inputs otherwise)."""
     return [
         check_structural_arithmetic(invoice),
         check_currency_match(invoice, action),
@@ -285,11 +358,13 @@ def run_checks(
 
 
 def critical_check_names() -> frozenset[str]:
-    """The check names the verifier emits as ``CheckKind.critical``, derived from
-    an actual ``run_checks`` call so the policy drift-assertion (D28) cannot
-    silently fall out of sync with the code. A check's ``type`` is invariant of
-    pass/fail, so the sample's values are irrelevant — only the emitted name set
-    matters."""
+    """The check names the verifier emits as ``CheckKind.critical`` — the union of
+    the frame stage and the content stage, derived from actual ``run_frame_checks``
+    + ``run_checks`` calls so the policy drift-assertion (D28) cannot silently fall
+    out of sync with the code. Both stage functions always return their full row
+    set (the short-circuit is in ``decide()``, not here), so this union cannot be
+    truncated (D31). A check's ``type`` is invariant of pass/fail, so the sample's
+    values are irrelevant — only the emitted name set matters."""
     sample_invoice = Invoice(
         invoice_number="_",
         vendor="_",
@@ -312,8 +387,9 @@ def critical_check_names() -> frozenset[str]:
         amount=Money(value="1", currency="USD"),
         vendor="_",
     )
+    outcomes = run_frame_checks(sample_invoice, sample_action) + run_checks(sample_invoice, sample_action)
     return frozenset(
         outcome.check.name
-        for outcome in run_checks(sample_invoice, sample_action)
+        for outcome in outcomes
         if outcome.check.type is CheckKind.critical
     )

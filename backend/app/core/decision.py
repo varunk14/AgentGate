@@ -30,7 +30,7 @@ from .schemas import (
     Money,
     ProposedAction,
 )
-from .verifier import CheckOutcome, Route, run_checks
+from .verifier import CheckOutcome, Route, run_checks, run_frame_checks
 
 
 class GroundingResult(str, Enum):
@@ -141,9 +141,30 @@ def decide(
     never override a block. Pure and LLM-free — grounding (``is_grounded``) is
     deterministic; extraction happens upstream, at the API boundary. trace_id/
     timestamp/latency are set there too.
+
+    The frame stage (D31) runs first as a PRIOR GATE: if the action is not an
+    approve_payment against the invoice it names, ESCALATE with the frame rows
+    only (no content check runs on non-comparable inputs) and ``score`` None (D32).
+    BLOCK > ESCALATE > ALLOW governs only the content stage, which runs on a valid
+    frame.
     """
+    # Frame stage: prior gate ahead of the precedence ladder (D31).
+    frame_outcomes = run_frame_checks(invoice, action)
+    frame_reasons = [o.reason for o in frame_outcomes if o.route == Route.escalate and o.reason]
+    if frame_reasons:
+        return Decision(
+            decision=DecisionType.escalate,
+            score=None,  # nothing content-verified — not 0 (D32)
+            checks=[o.check for o in frame_outcomes],
+            reasons=frame_reasons,
+            evidence_used=_evidence(invoice, raw_text),
+            proposed_action=action,
+        )
+
     outcomes = run_checks(invoice, action, is_duplicate=is_duplicate)
-    checks = [o.check for o in outcomes]
+    # Content-path checks table leads with the (passed) frame rows so an ALLOW
+    # honestly shows that action_type and invoice_number were verified too.
+    checks = [o.check for o in frame_outcomes] + [o.check for o in outcomes]
     block_reasons = [o.reason for o in outcomes if o.route == Route.block and o.reason]
     escalate_reasons = [o.reason for o in outcomes if o.route == Route.escalate and o.reason]
 

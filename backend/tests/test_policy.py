@@ -28,7 +28,16 @@ from app.core.schemas import (
     ProposedAction,
 )
 
-_CRITICAL = "critical_checks:\n  - structural_arithmetic\n  - currency_match\n  - action_amount_matches_total\n"
+# Must equal the verifier's critical set (frame checks included, PRD §8) so a
+# policy built from this fixture loads past the drift assertion.
+_CRITICAL = (
+    "critical_checks:\n"
+    "  - action_type_supported\n"
+    "  - invoice_number_match\n"
+    "  - structural_arithmetic\n"
+    "  - currency_match\n"
+    "  - action_amount_matches_total\n"
+)
 _RETRY = "retry:\n  max_attempts: 2\n"
 
 
@@ -63,7 +72,8 @@ def test_default_policy_shape():
     assert DEFAULT_POLICY.score_below == Decimal("0.80")
     assert DEFAULT_POLICY.retry.max_attempts == 2
     assert DEFAULT_POLICY.critical_checks == frozenset(
-        {"structural_arithmetic", "currency_match", "action_amount_matches_total"}
+        {"action_type_supported", "invoice_number_match",
+         "structural_arithmetic", "currency_match", "action_amount_matches_total"}
     )
 
 

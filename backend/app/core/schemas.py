@@ -14,6 +14,25 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, field_validator
 
 
+def _normalized_identifier(v: object, field_name: str) -> str:
+    """Strip surrounding whitespace (a lossless transport artifact, never part of
+    an identifier) and require a non-empty result. Case, internal spacing, and
+    punctuation are preserved — an identifier has no lossless entity-level
+    canonical form (D8). This normalized value is what the duplicate store keys
+    on, so normalization lives here at the schema boundary, not in the frame
+    check: otherwise ``" INV-001"`` and ``"INV-001"`` are distinct SQLite primary
+    keys and one leading space silently defeats the duplicate check (D31)."""
+    if not isinstance(v, str):
+        raise ValueError(f"{field_name} must be a string.")
+    v = v.strip()
+    if not v:
+        raise ValueError(
+            f"{field_name} must be a non-empty identifier "
+            "(min length 1 after stripping surrounding whitespace)."
+        )
+    return v
+
+
 class Money(BaseModel):
     """A monetary amount. ``value`` is a ``Decimal`` parsed from a string/int;
     ``currency`` is first-class and required (DECISIONS D1/D12)."""
@@ -114,6 +133,11 @@ class Invoice(BaseModel):
     tax_lines: list[TaxLine] = []
     total: Money
 
+    @field_validator("invoice_number")
+    @classmethod
+    def _normalize_invoice_number(cls, v: str) -> str:
+        return _normalized_identifier(v, "invoice_number")
+
 
 class ActionType(str, Enum):
     approve_payment = "approve_payment"
@@ -131,6 +155,11 @@ class ProposedAction(BaseModel):
     vendor: str
     adjustments: list = []
     agent_rationale: str = ""
+
+    @field_validator("invoice_number")
+    @classmethod
+    def _normalize_invoice_number(cls, v: str) -> str:
+        return _normalized_identifier(v, "invoice_number")
 
 
 class CheckKind(str, Enum):
@@ -179,7 +208,10 @@ class Decision(BaseModel):
     are populated at the API boundary; the core decision logic is pure."""
 
     decision: DecisionType
-    score: Decimal
+    # Optional: None means the decision scored nothing to score against — a
+    # frame-stage escalate (content checks never ran) or a malformed-input
+    # fail-closed escalate — which is distinct from 0 (measured, all failed). D32.
+    score: Optional[Decimal]
     checks: list[Check] = []
     reasons: list[BlockReason] = []
     evidence_used: list[str] = []

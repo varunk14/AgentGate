@@ -8,11 +8,15 @@ escalate_if:
 
 # Asserted spec/code drift tripwire, NOT a behaviour toggle: this set must
 # EXACTLY equal the checks the verifier marks CheckKind.critical, or load_policy
-# raises PolicyError. There is deliberately no `block_if.any_critical_check_failed`:
-# that pre-D3 "any critical failure => BLOCK" rule is false — only an
-# agent-fixable critical failure BLOCKs; source-invalid arithmetic and currency
-# mismatch ESCALATE (D3). Encoding it would enforce a lie.
+# raises PolicyError. Includes the frame checks (action_type_supported,
+# invoice_number_match) — they are critical and must pass for ALLOW (D31). There
+# is deliberately no `block_if.any_critical_check_failed`: that pre-D3 "any
+# critical failure => BLOCK" rule is false — only an agent-fixable critical
+# failure BLOCKs; source-invalid arithmetic, currency mismatch, and the frame
+# checks all ESCALATE (D3/D31). Encoding it would enforce a lie.
 critical_checks:
+  - action_type_supported
+  - invoice_number_match
   - structural_arithmetic
   - currency_match
   - action_amount_matches_total
