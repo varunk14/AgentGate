@@ -20,6 +20,12 @@ venv/
 node_modules/
 .next/
 out/
+.vercel/
+
+# Playwright artifacts
+test-results/
+playwright-report/
+blob-report/
 
 # OS / editor
 .DS_Store

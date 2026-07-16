@@ -423,3 +423,59 @@ def test_fail_closed_trace_records_no_body_content(store):
     (record,) = tracer.records
     assert "SECRET-GARBAGE" not in json.dumps(record["input"])
     assert record["input"]["body_bytes"] == len(b"SECRET-GARBAGE that is not json")
+
+
+# --- CORS: explicit origins only, off by default (D40) ---------------------------
+
+
+DASHBOARD_ORIGIN = "http://127.0.0.1:3987"
+
+
+def test_cors_preflight_allowed_for_configured_origin(store):
+    app = create_app(store=store, tracer=NoopTracer(), cors_origins=[DASHBOARD_ORIGIN])
+    with TestClient(app) as client:
+        resp = client.options(
+            "/verify",
+            headers={
+                "Origin": DASHBOARD_ORIGIN,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.headers["access-control-allow-origin"] == DASHBOARD_ORIGIN
+        # narrowest grant: no credentials ever (D40)
+        assert "access-control-allow-credentials" not in resp.headers
+
+
+def test_cors_denies_unlisted_origin_and_absent_config(store):
+    app = create_app(store=store, tracer=NoopTracer(), cors_origins=[DASHBOARD_ORIGIN])
+    with TestClient(app) as client:
+        resp = client.post(
+            "/verify", json=verify_body(), headers={"Origin": "https://evil.example"}
+        )
+        assert "access-control-allow-origin" not in resp.headers
+    # unconfigured (explicit empty) => the middleware is absent entirely
+    bare = create_app(store=store, tracer=NoopTracer(), cors_origins=[])
+    with TestClient(bare) as client:
+        resp = client.post(
+            "/verify", json=verify_body(), headers={"Origin": DASHBOARD_ORIGIN}
+        )
+        assert resp.status_code == 200
+        assert "access-control-allow-origin" not in resp.headers
+
+
+def test_cors_origins_parsed_from_env(store, monkeypatch):
+    monkeypatch.setenv(
+        "AGENTGATE_CORS_ORIGINS", f"https://agentgate.vercel.app, {DASHBOARD_ORIGIN}"
+    )
+    app = create_app(store=store, tracer=NoopTracer())
+    with TestClient(app) as client:
+        resp = client.options(
+            "/verify",
+            headers={
+                "Origin": DASHBOARD_ORIGIN,
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert resp.headers["access-control-allow-origin"] == DASHBOARD_ORIGIN

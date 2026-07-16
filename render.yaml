@@ -1,0 +1,30 @@
+# Render Blueprint for the AgentGate backend (DECISIONS D42).
+# Values for the sync:false variables are set in the Render dashboard —
+# secrets and deploy-specific origins never live in git. Wiring order:
+# (1) this service comes up -> note its URL; (2) deploy the frontend on Vercel
+# with NEXT_PUBLIC_AGENTGATE_API set to that URL; (3) set the Vercel origin in
+# AGENTGATE_CORS_ORIGINS here and restart. Free-plan realities: ~1 minute cold
+# start after idle, and an ephemeral disk (the duplicate store resets on
+# redeploy — inert anyway: nothing over HTTP writes it, D38).
+services:
+  - type: web
+    name: agentgate-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -e ".[server,tracing]"
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      # Exact browser origins allowed to call the API cross-origin (comma-
+      # separated). Leave empty until the frontend URL exists; empty = no
+      # cross-origin access at all (fail-closed default, D40).
+      - key: AGENTGATE_CORS_ORIGINS
+        sync: false
+      # Optional Langfuse tracing (D37): unset keys = tracing is a no-op.
+      - key: LANGFUSE_PUBLIC_KEY
+        sync: false
+      - key: LANGFUSE_SECRET_KEY
+        sync: false

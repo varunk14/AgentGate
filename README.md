@@ -25,7 +25,9 @@ The verification core is working end to end:
 - **Fail-closed input boundary** — input that cannot be parsed becomes a valid `escalate` decision with a `null` score via a pure factory (never a crash, never an allow), with error messages bounded so raw caller text never rides into traces or the dashboard. Every caller-supplied text field is length-capped at the schema; anything over a cap is rejected and escalates to a human. This is the contract the HTTP API sits on.
 - **HTTP API** — `POST /verify` serves the gate and always answers **HTTP 200 with a decision** (verified or fail-closed): an undecodable body, a schema-invalid field, an oversized request (1 MiB cap), or an unexpected internal error all become a valid `escalate` decision — never a 5xx, never a framework 422, never an allow. Unknown fields anywhere in the request are rejected rather than silently dropped (a misspelled `adjustments` key must not turn a declared withholding into an auto-"fixed" full payment), money may be sent as JSON strings or numbers (decoded to exact decimals, floats never exist), and every decimal comes back as a JSON string so nothing re-floats it downstream. `/verify` is read-only — it reads the duplicate store, records nothing, so a dry run never burns an invoice number. Optional Langfuse tracing observes decisions without being able to affect them (no keys → no-op; of raw invoice text it records length only, never content).
 
-Still to come: a web dashboard and an MCP interface.
+- **Web dashboard** — a Next.js dashboard (`frontend/`) that submits a request body to the gate **verbatim** and renders the decision exactly as returned: the banner, the machine-readable reasons, the checks table, score (`null` renders as "not computed", never 0), evidence, and trace id. Money stays the exact string the gate returned — the UI does no float math, and pasting garbage into the request box demonstrates the fail-closed contract live. Covered by a Playwright end-to-end suite that boots the real backend and crosses real CORS, in CI on every push.
+
+Still to come: an MCP interface and pip packaging.
 
 ## Development
 
@@ -43,5 +45,27 @@ uvicorn app.main:app                 # GET /health, POST /verify
 ```
 
 Optional environment: `AGENTGATE_DB_PATH` points the duplicate store at a file
-(default is in-memory); `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` (and
-optionally `LANGFUSE_HOST`) enable tracing — see `backend/.env.example`.
+(default is in-memory); `AGENTGATE_CORS_ORIGINS` grants cross-origin access to
+exact browser origins (unset = none); `LANGFUSE_PUBLIC_KEY` /
+`LANGFUSE_SECRET_KEY` (and optionally `LANGFUSE_HOST`) enable tracing — see
+`backend/.env.example`.
+
+Run the dashboard (from `frontend/`):
+
+```bash
+npm install
+npm run dev                          # expects the API on http://127.0.0.1:8000
+npm run e2e                          # Playwright gate: boots backend + frontend itself
+```
+
+Point it at a different API with `NEXT_PUBLIC_AGENTGATE_API`; set
+`NEXT_PUBLIC_TRACE_URL_TEMPLATE` (a URL containing `{id}`) to turn trace ids
+into links.
+
+## Deploy
+
+The backend deploys to Render from `render.yaml` (free plan; ~1 minute cold
+start after idle, ephemeral disk). The frontend deploys to Vercel from
+`frontend/`. Order matters: bring up the backend, build the frontend with
+`NEXT_PUBLIC_AGENTGATE_API` set to the backend URL, then set that Vercel
+origin in the backend's `AGENTGATE_CORS_ORIGINS`.

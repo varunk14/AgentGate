@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator, Optional
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.verify import router
 from app.core.duplicate_store import DuplicateStore
@@ -25,14 +26,25 @@ from app.core.tracing import Tracer, build_tracer
 logger = logging.getLogger("agentgate.main")
 
 
+def _cors_origins_from_env() -> list[str]:
+    raw = os.environ.get("AGENTGATE_CORS_ORIGINS", "")
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
 def create_app(
     *,
     store: Optional[DuplicateStore] = None,
     tracer: Optional[Tracer] = None,
     policy: Optional[Policy] = None,
+    cors_origins: Optional[list[str]] = None,
 ) -> FastAPI:
     """Build the service. Anything not injected is wired from the environment.
-    An injected store is closed by its owner (the test/caller), not by the app."""
+    An injected store is closed by its owner (the test/caller), not by the app.
+
+    CORS (D40): cross-origin access only for the explicit origins in
+    ``cors_origins`` (or the ``AGENTGATE_CORS_ORIGINS`` env, comma-separated),
+    no credentials. Unset/empty means the middleware is not installed at all —
+    same-origin only, the fail-closed default; never ``*``."""
     owns_store = store is None
 
     @asynccontextmanager
@@ -53,6 +65,16 @@ def create_app(
     )
     app.state.tracer = tracer if tracer is not None else build_tracer()
     app.state.policy = policy if policy is not None else DEFAULT_POLICY
+
+    origins = _cors_origins_from_env() if cors_origins is None else [o for o in cors_origins if o]
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=False,
+            allow_methods=["POST", "GET"],
+            allow_headers=["Content-Type"],
+        )
 
     app.include_router(router)
 

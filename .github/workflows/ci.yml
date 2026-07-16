@@ -19,3 +19,32 @@ jobs:
         # fully stubbed and deterministic, so it runs on every push.
         run: pytest
         working-directory: backend
+
+  e2e:
+    # The dashboard gate runs against the REAL stack — uvicorn serving the
+    # actual gate plus the Next dev server — still deterministic: structured
+    # samples, in-memory store, no LLM anywhere in the path.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install backend
+        run: pip install -e "backend[server]"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend
+        run: npm ci
+        working-directory: frontend
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Dashboard e2e
+        run: npx playwright test
+        working-directory: frontend
+        env:
+          E2E_BACKEND_COMMAND: python -m uvicorn app.main:app --port 8731
