@@ -31,6 +31,20 @@ MAX_RATIONALE_LENGTH = 2000
 MAX_ADJUSTMENTS = 20
 MAX_ADJUSTMENT_CHARS = 500
 MAX_NUMERIC_CHARS = 50
+# List and raw-text bounds (PRD SS6/SS9, D36): same exposure, same treatment as
+# the string bounds above. Documents beyond these ceilings are exotic-format
+# territory (PRD SS7) and escalate by failing validation.
+MAX_LINE_ITEMS = 500
+MAX_TAX_LINES = 50
+MAX_RAW_TEXT_LENGTH = 50_000
+
+# Every caller-facing wire model is extra="forbid" (PRD SS6/SS9, D36): an
+# unknown or misspelled field is a ValidationError -> fail-closed ESCALATE,
+# never a silent drop. Load-bearing, not pedantry: a misspelled `adjustments`
+# key silently dropped would default to [] and flip a declared-adjustment
+# ESCALATE into an agent-fixable BLOCK whose fixer then pays the full total.
+# Response-side models (Decision, Check, BlockReason) are not forbid — we
+# construct them.
 
 
 def _normalized_identifier(v: object, field_name: str) -> str:
@@ -74,7 +88,7 @@ class Money(BaseModel):
     """A monetary amount. ``value`` is a ``Decimal`` parsed from a string/int;
     ``currency`` is first-class and required (DECISIONS D1/D12)."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     value: Decimal
     currency: str
@@ -126,6 +140,8 @@ class LineItemKind(str, Enum):
 
 
 class LineItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     description: str = Field(max_length=MAX_DESCRIPTION_LENGTH)
     quantity: Decimal
     unit_price: Money
@@ -158,6 +174,8 @@ class LineItem(BaseModel):
 
 
 class TaxLine(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     rate: Decimal
     amount: Money
 
@@ -184,13 +202,19 @@ class TaxLine(BaseModel):
 
 
 class Invoice(BaseModel):
+    """The caller-supplied source document. ``subtotal`` is accepted although no
+    check consumes it — it is a field of the invoice document itself, not a
+    separate evidence artifact promising a check (contrast ``source.po``, D36)."""
+
+    model_config = ConfigDict(extra="forbid")
+
     invoice_number: str
     vendor: str = Field(max_length=MAX_VENDOR_LENGTH)
     date: str = Field(max_length=MAX_DATE_LENGTH)
     currency: str
-    line_items: list[LineItem] = []
+    line_items: list[LineItem] = Field(default_factory=list, max_length=MAX_LINE_ITEMS)
     subtotal: Optional[Money] = None
-    tax_lines: list[TaxLine] = []
+    tax_lines: list[TaxLine] = Field(default_factory=list, max_length=MAX_TAX_LINES)
     total: Money
 
     @field_validator("invoice_number")
@@ -213,6 +237,8 @@ class ActionType(str, Enum):
 class ProposedAction(BaseModel):
     """What the agent wants to do. ``adjustments`` are declared only and
     NOT verified in v1 — any non-empty diff escalates (D13/D17)."""
+
+    model_config = ConfigDict(extra="forbid")
 
     action_type: ActionType
     invoice_number: str
@@ -305,3 +331,32 @@ class Decision(BaseModel):
     trace_id: Optional[str] = None
     latency_ms: Optional[int] = None
     timestamp: Optional[str] = None
+
+
+# --- HTTP request envelope (PRD SS9, Slice 7a) ----------------------------------
+
+
+class Source(BaseModel):
+    """Caller-supplied evidence (PRD SS0/SS9). ``invoice`` is required — /verify
+    runs no extraction in v1. ``raw_text`` is optional grounding evidence and is
+    treated literally when present: an empty string is evidence that grounds
+    nothing (the D27 total gate escalates), never coerced to "absent" (D36).
+    There is deliberately no ``po`` field: the ``po_match`` check does not exist
+    yet, and accepting evidence nothing reads would make ALLOW overclaim —
+    ``extra="forbid"`` rejects it until the check ships (D36)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    invoice: Invoice
+    raw_text: Optional[str] = Field(default=None, max_length=MAX_RAW_TEXT_LENGTH)
+
+
+class VerifyRequest(BaseModel):
+    """The POST /verify body (PRD SS9): the proposed action plus the evidence to
+    verify it against. Policy is server-side config, never part of the request —
+    a caller-supplied policy would be a fail-open vector."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    proposed_action: ProposedAction
+    source: Source
