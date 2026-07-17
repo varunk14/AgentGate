@@ -1,26 +1,22 @@
-"""Grounding-only decision layer (DECISIONS D19).
+"""The decision layer: ``decide()`` and the fail-closed factory.
 
-Output is a GROUNDING RESULT, not allow/block/escalate: the deterministic
-allow/block/escalate decision is added once those checks exist. A grounding
-result means "the number appears in the source," never "the payment is correct."
-Keeping the output honest this way proves extract -> ground -> decide runs end to
-end without masquerading as a trustworthy approval.
-
-Fail-closed (D11): any extraction/router failure yields ``ungroundable`` — never
-a crash, never a false ``grounded``.
+``decide()`` assembles the ALLOW/BLOCK/ESCALATE Decision from the frame stage,
+the deterministic content checks, grounding coverage, and the policy
+thresholds. It is pure and fully deterministic — regex and Decimal only, no
+LLM anywhere in the verification path (the only model call in the system is
+the demo agent's proposal step). ``fail_closed_decision`` converts any
+inability to verify into a valid escalate Decision (D11/D34): never a crash,
+never an allow the gate cannot back.
 """
 
 from __future__ import annotations
 
 from decimal import Decimal
-from enum import Enum
-from typing import Callable, Optional, Sequence
+from typing import Optional, Sequence
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ValidationError
 
-from .extractor import ExtractionError, extract_total
 from .grounding import is_grounded
-from .llm_router import call_llm
 from .policy import DEFAULT_POLICY, Policy
 from .schemas import (
     BlockReason,
@@ -31,56 +27,6 @@ from .schemas import (
     ProposedAction,
 )
 from .verifier import CheckOutcome, Route, run_checks, run_frame_checks
-
-
-class GroundingResult(str, Enum):
-    grounded = "grounded"
-    not_grounded = "not_grounded"
-    ungroundable = "ungroundable"
-
-
-class GroundingOutcome(BaseModel):
-    """The grounding verdict plus what was extracted (if anything) and a
-    human-readable detail."""
-
-    model_config = ConfigDict(frozen=True)
-
-    result: GroundingResult
-    extracted_value: Optional[Decimal] = None
-    currency: Optional[str] = None
-    detail: str = ""
-
-
-def assess_grounding(
-    raw_text: str, *, llm_call: Callable[[str], str] = call_llm
-) -> GroundingOutcome:
-    """Extract the total from ``raw_text`` and check it is grounded in that text.
-
-    Returns ``ungroundable`` if extraction fails (fail-closed, D11); otherwise
-    ``grounded`` / ``not_grounded`` from the token-level Decimal match (D21).
-    """
-    try:
-        total = extract_total(raw_text, llm_call=llm_call)
-    except ExtractionError as exc:
-        return GroundingOutcome(
-            result=GroundingResult.ungroundable,
-            detail=f"Could not extract a trustworthy total: {exc}",
-        )
-
-    if is_grounded(total.value, raw_text):
-        return GroundingOutcome(
-            result=GroundingResult.grounded,
-            extracted_value=total.value,
-            currency=total.currency,
-            detail=f"Extracted total {total.value} appears in the source text.",
-        )
-    return GroundingOutcome(
-        result=GroundingResult.not_grounded,
-        extracted_value=total.value,
-        currency=total.currency,
-        detail=f"Extracted total {total.value} does not appear as a money value "
-        "in the source text.",
-    )
 
 
 def _coverage_fields(invoice: Invoice) -> list[Decimal]:
@@ -289,7 +235,7 @@ def _formatted_error(error: Exception | str) -> str:
 def fail_closed_decision(errors: Sequence[Exception | str]) -> Decision:
     """A valid ESCALATE Decision for input that could not be parsed or verified.
 
-    The API boundary catches its errors (ValidationError, extraction/router
+    The API boundary catches its errors (ValidationError, source-of-record
     failure, undecodable body) and calls this instead of crashing — fail closed,
     never a 5xx, never ALLOW (PRD SS9, D34). Pure: no HTTP, no I/O.
 

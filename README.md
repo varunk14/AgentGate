@@ -22,7 +22,7 @@ request after idle can take up to a minute while the backend wakes).
 
 The verification core is working end to end:
 
-- **Grounding** — extract an invoice total from raw text and confirm the amount actually appears there, matched by numeric value, not substring (`grounded` / `not_grounded` / `ungroundable`).
+- **Grounding** — when raw invoice text is supplied, the money fields the checks consume must literally appear in it, matched on parsed numeric value at **token level, never substring** (`1240` does not ground inside `INV-31240` or `$11,240.00`). Coverage over those fields feeds the decision score, and a total that does not appear in the text escalates decisively regardless of the score.
 - **Deterministic checks + decision** — structural arithmetic, currency, amount-vs-total, vendor, and duplicate checks over a structured invoice, producing a real **ALLOW / BLOCK / ESCALATE** decision with a machine-readable reason and a score.
 - **Frame stage** — before those content checks run, the gate confirms the action is even the thing they verify: an `approve_payment` (not a flag or a reject) against the invoice number it actually names. A wrong action type or a mismatched invoice number escalates to a human — it is never auto-"fixed," because the two readings of a mismatch (wrong evidence attached vs a typo'd action) have opposite corrections and the gate cannot tell which.
 - **Retry loop** — a caller consumes a BLOCK reason, applies the fix, and resubmits until it reaches ALLOW, or routes to a human when it can't. The decision record is never rewritten by the loop.
@@ -107,9 +107,12 @@ proposed action  +  evidence: caller-supplied (structured invoice, optional raw
   ALLOW   |   BLOCK (machine-fixable reason)   |   ESCALATE (human)
 ```
 
-The only LLM in the system sits behind `llm_router.py` for extraction; the
-decision path is pure and deterministic, and anything the gate cannot verify
-fails closed to a human. In tests, the router is the only mocked seam.
+The verification path contains **no LLM at all** — every check, the grounding
+match, and the score are regex and exact-decimal arithmetic, so the gate is
+deterministic, free to run, runs unmocked in CI, and the eval harness scores
+the real decision function. The only model call in the entire system is the
+demo agent's proposal step (behind `llm_router.py`, the one mocked seam in
+tests). Anything the gate cannot verify fails closed to a human.
 
 ## Evaluation, honestly
 

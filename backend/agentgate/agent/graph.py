@@ -33,7 +33,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from pydantic import ValidationError
 
-from ..core.extractor import ExtractionError, parse_llm_json
+from ..core.llm_json import ExtractionError, parse_llm_json
 from ..core.llm_router import LLMRouterError, call_llm
 from ..core.policy import DEFAULT_POLICY, Policy
 from ..core.retry import Resolution, UnfixableBlockError, run_with_retry

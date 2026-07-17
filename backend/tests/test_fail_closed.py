@@ -15,7 +15,7 @@ import pytest
 from pydantic import ValidationError
 
 from agentgate.core.decision import fail_closed_decision
-from agentgate.core.extractor import ExtractionError
+from agentgate.core.llm_json import ExtractionError
 from agentgate.core.schemas import DecisionType, Invoice, Money, ProposedAction
 
 
