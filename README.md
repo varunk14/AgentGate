@@ -15,6 +15,8 @@ built incrementally.
 [API](https://agentgate-api-mvob.onrender.com/health) (free tier — the first
 request after idle can take up to a minute while the backend wakes).
 
+![The dashboard blocking a misread amount, then allowing the corrected one](docs/demo.gif)
+
 ## Status
 
 The verification core is working end to end:
@@ -30,8 +32,91 @@ The verification core is working end to end:
 - **HTTP API** — `POST /verify` serves the gate and always answers **HTTP 200 with a decision** (verified or fail-closed): an undecodable body, a schema-invalid field, an oversized request (1 MiB cap), or an unexpected internal error all become a valid `escalate` decision — never a 5xx, never a framework 422, never an allow. Unknown fields anywhere in the request are rejected rather than silently dropped (a misspelled `adjustments` key must not turn a declared withholding into an auto-"fixed" full payment), money may be sent as JSON strings or numbers (decoded to exact decimals, floats never exist), and every decimal comes back as a JSON string so nothing re-floats it downstream. `/verify` is read-only — it reads the duplicate store, records nothing, so a dry run never burns an invoice number. Optional Langfuse tracing observes decisions without being able to affect them (no keys → no-op; of raw invoice text it records length only, never content).
 
 - **Web dashboard** — a Next.js dashboard (`frontend/`) that submits a request body to the gate **verbatim** and renders the decision exactly as returned: the banner, the machine-readable reasons, the checks table, score (`null` renders as "not computed", never 0), evidence, and trace id. Money stays the exact string the gate returned — the UI does no float math, and pasting garbage into the request box demonstrates the fail-closed contract live. Covered by a Playwright end-to-end suite that boots the real backend and crosses real CORS, in CI on every push.
+- **MCP server + pip package** — `pip install .` installs `agentgate` with the default policy shipped inside the wheel, and `agentgate-mcp` serves a `verify_action` tool over stdio for MCP-speaking agents. The tool runs the same validation and decision path as the HTTP API and always returns a Decision — never a tool error the calling agent might route around. Money over MCP must be JSON strings: the transport parses JSON before AgentGate sees it, so a numeric amount is already a lossy float and is rejected into a fail-closed escalate. A CI job installs the package into a clean environment on every push and verifies a decision from it.
 
-Still to come: an MCP interface and pip packaging.
+Next milestone (post-v1): **independent source fetch** — pulling the invoice from a system of record by an identifier the agent provides, so the agent chooses *which* invoice but never *what it says*. That is the upgrade that turns consistency-checking into a real trust anchor; see the threat model above.
+
+## Quickstart
+
+Ask the live gate to verify an action (money values are strings — exactness is the product):
+
+```bash
+curl -s -X POST https://agentgate-api-mvob.onrender.com/verify \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "proposed_action": {"action_type": "approve_payment", "invoice_number": "INV-001",
+                        "amount": {"value": "12400.00", "currency": "USD"}, "vendor": "Acme Corp"},
+    "source": {"invoice": {"invoice_number": "INV-001", "vendor": "Acme Corp",
+               "date": "2026-01-15", "currency": "USD",
+               "line_items": [{"description": "Widget", "quantity": "1",
+                 "unit_price": {"value": "1240.00", "currency": "USD"},
+                 "amount": {"value": "1240.00", "currency": "USD"}, "kind": "charge"}],
+               "total": {"value": "1240.00", "currency": "USD"}}}}'
+```
+
+The response is a `block` with `"field_to_change": "proposed_action.amount"` and the exact expected value — a reason an agent can fix against and resubmit. Or use it as a library:
+
+```bash
+pip install "git+https://github.com/varunk14/AgentGate.git#subdirectory=backend"
+```
+
+```python
+from agentgate.core.decision import decide
+from agentgate.core.schemas import Invoice, ProposedAction
+
+decision = decide(Invoice.model_validate(invoice_dict),
+                  ProposedAction.model_validate(action_dict))
+print(decision.decision, [r.message for r in decision.reasons])
+```
+
+Or as an MCP server for an agent runtime (install with the `mcp` extra, then register the stdio command `agentgate-mcp`; the tool is `verify_action`).
+
+## Architecture
+
+```
+proposed action  +  caller-supplied evidence (structured invoice, optional raw text)
+        |
+        v
+  frame stage          is this even an approve_payment against the invoice it
+        |              names?  wrong frame -> ESCALATE, score null
+        v
+  deterministic        structural arithmetic, currency, amount-vs-total,
+  checks               vendor, duplicate — pure functions, Decimal only
+        |
+        v
+  grounding            do the invoice's numbers literally appear in the raw
+        |              text?  token-level Decimal match, never substring
+        v
+  policy               amount ceiling, score floor — config can add
+        |              escalations, never open the gate
+        v
+  ALLOW   |   BLOCK (machine-fixable reason)   |   ESCALATE (human)
+```
+
+The only LLM in the system sits behind `llm_router.py` for extraction; the
+decision path is pure and deterministic, and anything the gate cannot verify
+fails closed to a human. In tests, the router is the only mocked seam.
+
+## Evaluation, honestly
+
+Scored as interventions vs. hand-labeled ground truth over 21 cases —
+escalating a legitimate payment counts as a **false positive** (the human cost
+of failing closed), and the misses the threat model predicts are reported by
+name, not hidden. Run it: `python -m eval.harness` from `backend/`.
+
+| Metric | Value |
+| --- | --- |
+| Precision | 0.615 |
+| Recall | 0.727 |
+| False-positive rate | 0.500 |
+| In-scope recall | 1.000 |
+
+Known misses (out of scope by design — consistent-but-wrong sources that only
+the independent-fetch milestone can catch): `oos_doctored_source`,
+`oos_renumbered_double_bill`, `oos_unauthorized_spend`. The false positives
+are fail-closed escalations of legitimate-but-unverifiable payments (a
+declared withholding, a vendor rename, a total-only invoice, an over-threshold
+amount, a reject the gate cannot judge).
 
 ## Development
 
@@ -73,3 +158,7 @@ start after idle, ephemeral disk). The frontend deploys to Vercel from
 `frontend/`. Order matters: bring up the backend, build the frontend with
 `NEXT_PUBLIC_AGENTGATE_API` set to the backend URL, then set that Vercel
 origin in the backend's `AGENTGATE_CORS_ORIGINS`.
+
+## License
+
+MIT — see `LICENSE`.
