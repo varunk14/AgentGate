@@ -1,5 +1,7 @@
-"""Shared test helpers. The router is the ONLY mocked seam (DECISIONS D9):
-tests inject stubbed raw LLM outputs; grounding/decision logic runs unmocked."""
+"""Shared test helpers. The router is the only SUBSTITUTION seam (DECISIONS D9):
+tests inject stubbed raw LLM outputs and run the real parsing/grounding/decision
+logic unmocked; fault-injection doubles (a raising decide, a raising tracer)
+exercise otherwise-unreachable failure paths and never return canned verdicts."""
 
 from __future__ import annotations
 
