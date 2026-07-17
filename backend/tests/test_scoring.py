@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from app.core.decision import decide, grounding_coverage
-from app.core.schemas import (
+from agentgate.core.decision import decide, grounding_coverage
+from agentgate.core.schemas import (
     DecisionType,
     Invoice,
     LineItem,

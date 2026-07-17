@@ -6,7 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from app.core.llm_router import LLMRouterError
+from agentgate.core.llm_router import LLMRouterError
 
 SAMPLES = Path(__file__).resolve().parent.parent / "data" / "sample_invoices"
 

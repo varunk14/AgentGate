@@ -31,8 +31,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from app.core.decision import decide
-from app.core.schemas import DecisionType, Invoice, ProposedAction
+from agentgate.core.decision import decide
+from agentgate.core.schemas import DecisionType, Invoice, ProposedAction
 
 DATASET_PATH = Path(__file__).resolve().parent / "dataset.jsonl"
 

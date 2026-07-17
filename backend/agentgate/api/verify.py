@@ -25,9 +25,9 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from app.core.decision import decide, fail_closed_decision
-from app.core.schemas import VerifyRequest
-from app.core.tracing import record_safely
+from agentgate.core.decision import decide, fail_closed_decision
+from agentgate.core.schemas import VerifyRequest
+from agentgate.core.tracing import record_safely
 
 logger = logging.getLogger("agentgate.api")
 

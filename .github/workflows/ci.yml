@@ -47,4 +47,4 @@ jobs:
         run: npx playwright test
         working-directory: frontend
         env:
-          E2E_BACKEND_COMMAND: python -m uvicorn app.main:app --port 8731
+          E2E_BACKEND_COMMAND: python -m uvicorn agentgate.main:app --port 8731

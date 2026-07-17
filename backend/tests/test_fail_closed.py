@@ -14,9 +14,9 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from app.core.decision import fail_closed_decision
-from app.core.extractor import ExtractionError
-from app.core.schemas import DecisionType, Invoice, Money, ProposedAction
+from agentgate.core.decision import fail_closed_decision
+from agentgate.core.extractor import ExtractionError
+from agentgate.core.schemas import DecisionType, Invoice, Money, ProposedAction
 
 
 def invoice_payload(**overrides) -> dict:

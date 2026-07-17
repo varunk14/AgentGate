@@ -27,7 +27,7 @@ from threading import Barrier
 
 import pytest
 
-from app.core.duplicate_store import AlreadyApprovedError, DuplicateStore
+from agentgate.core.duplicate_store import AlreadyApprovedError, DuplicateStore
 
 
 # --- collision: the second write for the same key raises, never swallows ------

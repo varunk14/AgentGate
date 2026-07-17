@@ -17,9 +17,9 @@ from decimal import Decimal
 
 import pytest
 
-from app.core.decision import GroundingResult, assess_grounding
-from app.core.grounding import is_grounded, money_tokens
-from app.core.schemas import Money
+from agentgate.core.decision import GroundingResult, assess_grounding
+from agentgate.core.grounding import is_grounded, money_tokens
+from agentgate.core.schemas import Money
 from tests.conftest import failing_router, load_sample, stub_router
 
 GOOD = load_sample("acme_good.txt")  # realistic invoice; Total Due $1,240.00

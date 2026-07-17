@@ -29,8 +29,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.core.decision import decide
-from app.core.schemas import (
+from agentgate.core.decision import decide
+from agentgate.core.schemas import (
     DecisionType,
     Invoice,
     LineItem,
@@ -38,7 +38,7 @@ from app.core.schemas import (
     Money,
     ProposedAction,
 )
-from app.core.verifier import critical_check_names
+from agentgate.core.verifier import critical_check_names
 
 
 def m(value: str, currency: str = "USD") -> Money:

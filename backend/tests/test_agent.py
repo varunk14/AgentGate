@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from langgraph.types import Command
 
-from app.agent.graph import build_agent, initial_state
+from agentgate.agent.graph import build_agent, initial_state
 from tests.test_decision import make_invoice
 
 

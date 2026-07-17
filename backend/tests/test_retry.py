@@ -6,8 +6,8 @@ ESCALATES instead of looping. Plus D25: the loop never rewrites the gate verdict
 
 from __future__ import annotations
 
-from app.core.retry import Resolution, RetryOutcome, run_with_retry
-from app.core.schemas import (
+from agentgate.core.retry import Resolution, RetryOutcome, run_with_retry
+from agentgate.core.schemas import (
     BlockReason,
     BlockType,
     Check,

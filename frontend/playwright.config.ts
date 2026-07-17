@@ -13,7 +13,7 @@ const BACKEND_ORIGIN = `http://127.0.0.1:${BACKEND_PORT}`;
 // Local runs use the repo venv; CI overrides with a plain interpreter.
 const BACKEND_COMMAND =
   process.env.E2E_BACKEND_COMMAND ??
-  `../.venv/bin/python -m uvicorn app.main:app --port ${BACKEND_PORT}`;
+  `../.venv/bin/python -m uvicorn agentgate.main:app --port ${BACKEND_PORT}`;
 
 export default defineConfig({
   testDir: "./tests",

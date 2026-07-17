@@ -16,9 +16,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from app.core.decision import decide
-from app.core.duplicate_store import DuplicateStore
-from app.core.schemas import (
+from agentgate.core.decision import decide
+from agentgate.core.duplicate_store import DuplicateStore
+from agentgate.core.schemas import (
     BlockType,
     DecisionType,
     Invoice,

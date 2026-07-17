@@ -45,7 +45,7 @@ Run the API locally (from `backend/`, with the `server` extra installed):
 
 ```bash
 pip install -e ".[server]"
-uvicorn app.main:app                 # GET /health, POST /verify
+uvicorn agentgate.main:app                 # GET /health, POST /verify
 ```
 
 Optional environment: `AGENTGATE_DB_PATH` points the duplicate store at a file

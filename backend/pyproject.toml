@@ -25,4 +25,4 @@ addopts = "-m 'not live'"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*"]
+include = ["agentgate*"]

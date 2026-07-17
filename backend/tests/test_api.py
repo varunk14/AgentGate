@@ -19,9 +19,9 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from app.api.verify import MAX_BODY_BYTES
-from app.core.duplicate_store import DuplicateStore
-from app.core.schemas import (
+from agentgate.api.verify import MAX_BODY_BYTES
+from agentgate.core.duplicate_store import DuplicateStore
+from agentgate.core.schemas import (
     Invoice,
     LineItem,
     Money,
@@ -30,8 +30,8 @@ from app.core.schemas import (
     TaxLine,
     VerifyRequest,
 )
-from app.core.tracing import NoopTracer
-from app.main import create_app
+from agentgate.core.tracing import NoopTracer
+from agentgate.main import create_app
 
 
 def invoice_payload(**overrides) -> dict:
@@ -179,7 +179,7 @@ def test_unexpected_internal_error_fails_closed_not_5xx(client, monkeypatch):
     def boom(*args, **kwargs):
         raise RuntimeError("kaboom")
 
-    monkeypatch.setattr("app.api.verify.decide", boom)
+    monkeypatch.setattr("agentgate.api.verify.decide", boom)
     resp = client.post("/verify", json=verify_body())
     assert resp.status_code == 200  # the catch-all IS the contract (D35)
     body = resp.json()

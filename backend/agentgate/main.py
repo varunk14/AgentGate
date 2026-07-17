@@ -1,7 +1,7 @@
 """FastAPI entrypoint (PRD SS9/SS10, Slice 7a).
 
 ``create_app`` is the factory — tests inject the store/tracer/policy; the
-module-level ``app`` (the uvicorn target: ``uvicorn app.main:app``) wires from
+module-level ``app`` (the uvicorn target: ``uvicorn agentgate.main:app``) wires from
 the environment once at startup: ``AGENTGATE_DB_PATH`` for the duplicate store
 (default ``:memory:`` — a server default that silently creates a database file
 in the working directory would be a side effect nobody asked for, D38) and the
@@ -18,10 +18,10 @@ from typing import AsyncIterator, Optional
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.verify import router
-from app.core.duplicate_store import DuplicateStore
-from app.core.policy import DEFAULT_POLICY, Policy
-from app.core.tracing import Tracer, build_tracer
+from agentgate.api.verify import router
+from agentgate.core.duplicate_store import DuplicateStore
+from agentgate.core.policy import DEFAULT_POLICY, Policy
+from agentgate.core.tracing import Tracer, build_tracer
 
 logger = logging.getLogger("agentgate.main")
 

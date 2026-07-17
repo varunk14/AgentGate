@@ -17,9 +17,9 @@ from decimal import Decimal
 
 import pytest
 
-from app.core.decision import decide
-from app.core.policy import DEFAULT_POLICY, PolicyError, load_policy
-from app.core.schemas import (
+from agentgate.core.decision import decide
+from agentgate.core.policy import DEFAULT_POLICY, PolicyError, load_policy
+from agentgate.core.schemas import (
     DecisionType,
     Invoice,
     LineItem,
