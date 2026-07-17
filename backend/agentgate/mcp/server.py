@@ -29,6 +29,12 @@ from agentgate.core.decision import decide, fail_closed_decision
 from agentgate.core.duplicate_store import DuplicateStore
 from agentgate.core.policy import DEFAULT_POLICY
 from agentgate.core.schemas import VerifyRequest
+from agentgate.core.system_of_record import (
+    SourceOfRecordError,
+    build_source_of_record,
+    resolve_source,
+    system_of_record_evidence,
+)
 from agentgate.core.tracing import build_tracer, record_safely
 
 logger = logging.getLogger("agentgate.mcp")
@@ -41,6 +47,7 @@ mcp = FastMCP("agentgate")
 _store = DuplicateStore(os.environ.get("AGENTGATE_DB_PATH", ":memory:"))
 _tracer = build_tracer()
 _policy = DEFAULT_POLICY
+_source_of_record = build_source_of_record()
 
 
 @mcp.tool()
@@ -50,10 +57,13 @@ def verify_action(proposed_action: dict, source: dict) -> dict:
     Returns an AgentGate Decision: ``decision`` is allow | block | escalate,
     with machine-readable ``reasons`` (on a block, ``field_to_change`` and
     ``expected`` say exactly what to fix), a checks table, and a grounding
-    score. ``source`` must contain a structured ``invoice`` and may contain
-    ``raw_text`` (the original invoice text) for grounding. All money values
-    MUST be JSON strings (``"1240.00"``), never numbers — a JSON number has
-    already been parsed into a lossy float by the transport and will be
+    score. ``source`` either contains a structured ``invoice`` and optional
+    ``raw_text`` (the original invoice text) for grounding, or — when the
+    server is configured with a system of record — ``{"fetch": "INV-001"}``
+    to have AgentGate resolve the invoice itself; fetched decisions mark every
+    ``evidence_used`` entry with a ``system_of_record:`` prefix. All money
+    values MUST be JSON strings (``"1240.00"``), never numbers — a JSON number
+    has already been parsed into a lossy float by the transport and will be
     rejected into a fail-closed escalate (AgentGate keeps money exact). A
     passing decision means "consistent with the evidence provided," never
     "the payment is correct or authorized."
@@ -64,20 +74,30 @@ def verify_action(proposed_action: dict, source: dict) -> dict:
         req = VerifyRequest.model_validate(
             {"proposed_action": proposed_action, "source": source}
         )
-        raw_text = req.source.raw_text
-        is_duplicate = _store.is_approved(req.source.invoice.invoice_number)
+        resolved = resolve_source(req.source, _source_of_record)
+        raw_text = resolved.raw_text
+        is_duplicate = _store.is_approved(resolved.invoice.invoice_number)
         decision = decide(
-            req.source.invoice,
+            resolved.invoice,
             req.proposed_action,
             policy=_policy,
             raw_text=raw_text,
             is_duplicate=is_duplicate,
         )
+        if resolved.fetched:
+            # Provenance is a boundary fact (D45), stamped here like trace_id.
+            decision = decision.model_copy(
+                update={"evidence_used": system_of_record_evidence(decision.evidence_used)}
+            )
         trace_input = {
-            "invoice": req.source.invoice.model_dump(mode="json"),
+            "invoice": resolved.invoice.model_dump(mode="json"),
             "proposed_action": req.proposed_action.model_dump(mode="json"),
             "raw_text_length": None if raw_text is None else len(raw_text),
+            "source_mode": "system_of_record" if resolved.fetched else "caller",
         }
+    except SourceOfRecordError as exc:
+        decision = fail_closed_decision([str(exc)])
+        trace_input = {"validated": False}
     except ValidationError as exc:
         decision = fail_closed_decision([exc])
         trace_input = {"validated": False}

@@ -23,6 +23,12 @@ services:
       # cross-origin access at all (fail-closed default, D40).
       - key: AGENTGATE_CORS_ORIGINS
         sync: false
+      # Fetch mode (D45/D46): the system of record the gate resolves
+      # source.fetch requests from. Points at the demo records shipped in the
+      # repo (relative to rootDir backend); operators replace it with their own
+      # records directory. Unset would mean fetch requests escalate.
+      - key: AGENTGATE_RECORDS_DIR
+        value: data/system_of_record
       # Optional Langfuse tracing (D37): unset keys = tracing is a no-op.
       # Keys are REGION-BOUND: set LANGFUSE_HOST to the region shown in your
       # Langfuse browser URL (e.g. https://jp.cloud.langfuse.com or

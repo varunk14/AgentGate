@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from agentgate.api.verify import router
 from agentgate.core.duplicate_store import DuplicateStore
 from agentgate.core.policy import DEFAULT_POLICY, Policy
+from agentgate.core.system_of_record import SourceOfRecord, build_source_of_record
 from agentgate.core.tracing import Tracer, build_tracer
 
 logger = logging.getLogger("agentgate.main")
@@ -37,6 +38,7 @@ def create_app(
     tracer: Optional[Tracer] = None,
     policy: Optional[Policy] = None,
     cors_origins: Optional[list[str]] = None,
+    source_of_record: Optional[SourceOfRecord] = None,
 ) -> FastAPI:
     """Build the service. Anything not injected is wired from the environment.
     An injected store is closed by its owner (the test/caller), not by the app.
@@ -65,6 +67,11 @@ def create_app(
     )
     app.state.tracer = tracer if tracer is not None else build_tracer()
     app.state.policy = policy if policy is not None else DEFAULT_POLICY
+    # Fetch mode (D45): AGENTGATE_RECORDS_DIR wires the system of record; no
+    # store configured means fetch-mode requests fail-close to escalate.
+    app.state.source_of_record = (
+        source_of_record if source_of_record is not None else build_source_of_record()
+    )
 
     origins = _cors_origins_from_env() if cors_origins is None else [o for o in cors_origins if o]
     if origins:

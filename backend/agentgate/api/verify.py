@@ -27,6 +27,11 @@ from pydantic import ValidationError
 
 from agentgate.core.decision import decide, fail_closed_decision
 from agentgate.core.schemas import VerifyRequest
+from agentgate.core.system_of_record import (
+    SourceOfRecordError,
+    resolve_source,
+    system_of_record_evidence,
+)
 from agentgate.core.tracing import record_safely
 
 logger = logging.getLogger("agentgate.api")
@@ -80,22 +85,35 @@ async def verify(request: Request) -> JSONResponse:
         body_bytes = len(body)
         payload = json.loads(body, parse_float=Decimal)
         req = VerifyRequest.model_validate(payload)
-        raw_text = req.source.raw_text
+        resolved = resolve_source(req.source, request.app.state.source_of_record)
+        raw_text = resolved.raw_text
         is_duplicate = request.app.state.store.is_approved(
-            req.source.invoice.invoice_number
+            resolved.invoice.invoice_number
         )
         decision = decide(
-            req.source.invoice,
+            resolved.invoice,
             req.proposed_action,
             policy=request.app.state.policy,
             raw_text=raw_text,
             is_duplicate=is_duplicate,
         )
+        if resolved.fetched:
+            # Provenance is a boundary fact (D45): decide() cannot know where
+            # its invoice came from, so the prefix is stamped here.
+            decision = decision.model_copy(
+                update={"evidence_used": system_of_record_evidence(decision.evidence_used)}
+            )
         trace_input = {
-            "invoice": req.source.invoice.model_dump(mode="json"),
+            "invoice": resolved.invoice.model_dump(mode="json"),
             "proposed_action": req.proposed_action.model_dump(mode="json"),
             "raw_text_length": None if raw_text is None else len(raw_text),
+            "source_mode": "system_of_record" if resolved.fetched else "caller",
         }
+    except SourceOfRecordError as exc:
+        # An expected operational failure (not found, unconfigured store,
+        # corrupt record) — fail closed without the catch-all's stack trace.
+        decision = fail_closed_decision([str(exc)])
+        trace_input = _unvalidated(body_bytes)
     except BodyTooLargeError as exc:
         decision = fail_closed_decision([str(exc)])
         trace_input = _unvalidated(body_bytes)

@@ -1,0 +1,30 @@
+{
+  "invoice": {
+    "invoice_number": "INV-2026-0042",
+    "vendor": "Acme Corp",
+    "date": "2026-03-02",
+    "currency": "USD",
+    "line_items": [
+      {
+        "description": "Widget A (industrial grade)",
+        "quantity": "3",
+        "unit_price": { "value": "1000.00", "currency": "USD" },
+        "amount": { "value": "3000.00", "currency": "USD" },
+        "kind": "charge"
+      },
+      {
+        "description": "Calibration service",
+        "quantity": "2",
+        "unit_price": { "value": "150.00", "currency": "USD" },
+        "amount": { "value": "300.00", "currency": "USD" },
+        "kind": "charge"
+      }
+    ],
+    "subtotal": { "value": "3300.00", "currency": "USD" },
+    "tax_lines": [
+      { "rate": "0.0939", "amount": { "value": "310.00", "currency": "USD" } }
+    ],
+    "total": { "value": "3610.00", "currency": "USD" }
+  },
+  "raw_text": "ACME CORP\n123 Industrial Way, Springfield\n\nINVOICE INV-2026-0042\nDate: 2026-03-02\nBill to: Globex Purchasing\n\nWidget A (industrial grade)   3 x $1,000.00 .... $3,000.00\nCalibration service           2 x $150.00 ...... $300.00\n\nSubtotal ........................................ $3,300.00\nSales tax (9.39%) ............................... $310.00\nTOTAL DUE ....................................... $3,610.00 USD\n\nPayment terms: Net 30. Thank you for your business."
+}

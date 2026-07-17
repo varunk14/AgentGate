@@ -12,7 +12,7 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Caller-text bounds (PRD SS6, D34): generous ceilings, applied uniformly —
 # every wire-model string flows verbatim into the Decision echo
@@ -337,18 +337,49 @@ class Decision(BaseModel):
 
 
 class Source(BaseModel):
-    """Caller-supplied evidence (PRD SS0/SS9). ``invoice`` is required — /verify
-    runs no extraction in v1. ``raw_text`` is optional grounding evidence and is
-    treated literally when present: an empty string is evidence that grounds
-    nothing (the D27 total gate escalates), never coerced to "absent" (D36).
+    """The evidence for a verification (PRD SS0/SS9) — a two-mode union (D45).
+
+    Caller mode: ``invoice`` (required) plus optional ``raw_text`` grounding
+    evidence, treated literally when present: an empty string is evidence that
+    grounds nothing (the D27 total gate escalates), never coerced to "absent"
+    (D36). Fetch mode: ``fetch`` names an invoice number to resolve from the
+    operator-configured system of record — and nothing else may be supplied,
+    or the ``system_of_record:`` provenance stamped on the Decision would label
+    evidence the caller shaped. Exactly one mode; the validator enforces it.
+
     There is deliberately no ``po`` field: the ``po_match`` check does not exist
     yet, and accepting evidence nothing reads would make ALLOW overclaim —
     ``extra="forbid"`` rejects it until the check ships (D36)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    invoice: Invoice
+    invoice: Optional[Invoice] = None
     raw_text: Optional[str] = Field(default=None, max_length=MAX_RAW_TEXT_LENGTH)
+    fetch: Optional[str] = None
+
+    @field_validator("fetch")
+    @classmethod
+    def _normalize_fetch(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        return _normalized_identifier(v, "source.fetch")
+
+    @model_validator(mode="after")
+    def _exactly_one_mode(self) -> "Source":
+        if self.fetch is not None:
+            if self.invoice is not None or self.raw_text is not None:
+                raise ValueError(
+                    "source.fetch cannot be combined with caller-supplied evidence "
+                    "(invoice/raw_text): fetched evidence comes only from the "
+                    "system of record."
+                )
+        elif self.invoice is None:
+            raise ValueError(
+                "source requires either a structured invoice (caller-supplied "
+                "evidence) or fetch (an invoice number to resolve from the "
+                "system of record)."
+            )
+        return self
 
 
 class VerifyRequest(BaseModel):

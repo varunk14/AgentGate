@@ -1,6 +1,6 @@
 # AgentGate
 
-> **AgentGate is an agent-reliability gate, not a security/trust gate.** Its honest v1 claim: it catches an **honest-but-fallible agent's mistakes** — arithmetic slips, decimal errors, LLM misreads, duplicates — at the moment of the write, and returns a machine-readable reason the agent can fix against. It does **NOT** defend against an adversarial agent that forges its own evidence, and it does **NOT** detect fraud or bad business judgment. Passing AgentGate means "the action is consistent with the evidence provided," never "the payment is correct or authorized."
+> **AgentGate is an agent-reliability gate, not a security/trust gate.** Its honest v1 claim: it catches an **honest-but-fallible agent's mistakes** — arithmetic slips, decimal errors, LLM misreads, duplicates — at the moment of the write, and returns a machine-readable reason the agent can fix against. In caller-supplied mode it does **NOT** defend against an adversarial agent that forges its own evidence, and it does **NOT** detect fraud or bad business judgment. Passing AgentGate means "the action is consistent with the evidence provided," never "the payment is correct or authorized." **Fetch mode** narrows that first gap: the gate can resolve the invoice itself from an operator-controlled system of record, so the agent chooses *which* invoice but never *what it says* — a trust anchor exactly as strong as the deployment that keeps the records out of the agent's hands.
 
 A pre-action reliability gate for AI agents. When an agent proposes an action that
 touches real systems ("approve invoice INV-001 for $12,500"), AgentGate checks it
@@ -27,14 +27,14 @@ The verification core is working end to end:
 - **Retry loop** — a caller consumes a BLOCK reason, applies the fix, and resubmits until it reaches ALLOW, or routes to a human when it can't. The decision record is never rewritten by the loop.
 - **Honest evaluation** — a labeled dataset (`backend/eval/dataset.jsonl`) scored as precision, recall, and false-positive rate, not "accuracy." Escalating a legitimate payment counts as a false positive (the human cost of failing closed), and the consistent-but-wrong cases the threat model excludes are reported by name as known misses. Run it with `python -m eval.harness` from `backend/`. Current numbers: precision 0.62, recall 0.73, false-positive rate 0.50, in-scope recall 1.00 — imperfect on purpose; see `DECISIONS.md` (D6, D26).
 - **Typed policy** — a YAML policy (`backend/policies/default.yaml`) adds escalation thresholds (amount ceiling, grounding-coverage score floor) within the fixed precedence; it can add escalations but never open the gate. When raw invoice text is supplied, the score reflects real grounding coverage of the fields the checks consume, and a total that does not appear in the source escalates decisively regardless of that score.
-- **Agent + human-in-the-loop** — a LangGraph agent (`backend/app/agent/graph.py`) proposes a payment, and on a block re-proposes using the machine-readable reason as feedback (capped by the policy); on an escalate it pauses for a human to approve or reject. The correction is value-only — the agent can only change the field the gate flagged, never smuggle in an adjustment — and a malformed model response fails closed to a human rather than crashing. A human approval routes the action but never rewrites the recorded decision.
+- **Agent + human-in-the-loop** — a LangGraph agent (`backend/agentgate/agent/graph.py`) proposes a payment, and on a block re-proposes using the machine-readable reason as feedback (capped by the policy); on an escalate it pauses for a human to approve or reject. The correction is value-only — the agent can only change the field the gate flagged, never smuggle in an adjustment — and a malformed model response fails closed to a human rather than crashing. A human approval routes the action but never rewrites the recorded decision.
 - **Fail-closed input boundary** — input that cannot be parsed becomes a valid `escalate` decision with a `null` score via a pure factory (never a crash, never an allow), with error messages bounded so raw caller text never rides into traces or the dashboard. Every caller-supplied text field is length-capped at the schema; anything over a cap is rejected and escalates to a human. This is the contract the HTTP API sits on.
 - **HTTP API** — `POST /verify` serves the gate and always answers **HTTP 200 with a decision** (verified or fail-closed): an undecodable body, a schema-invalid field, an oversized request (1 MiB cap), or an unexpected internal error all become a valid `escalate` decision — never a 5xx, never a framework 422, never an allow. Unknown fields anywhere in the request are rejected rather than silently dropped (a misspelled `adjustments` key must not turn a declared withholding into an auto-"fixed" full payment), money may be sent as JSON strings or numbers (decoded to exact decimals, floats never exist), and every decimal comes back as a JSON string so nothing re-floats it downstream. `/verify` is read-only — it reads the duplicate store, records nothing, so a dry run never burns an invoice number. Optional Langfuse tracing observes decisions without being able to affect them (no keys → no-op; of raw invoice text it records length only, never content).
 
 - **Web dashboard** — a Next.js dashboard (`frontend/`) that submits a request body to the gate **verbatim** and renders the decision exactly as returned: the banner, the machine-readable reasons, the checks table, score (`null` renders as "not computed", never 0), evidence, and trace id. Money stays the exact string the gate returned — the UI does no float math, and pasting garbage into the request box demonstrates the fail-closed contract live. Covered by a Playwright end-to-end suite that boots the real backend and crosses real CORS, in CI on every push.
 - **MCP server + pip package** — `pip install .` installs `agentgate` with the default policy shipped inside the wheel, and `agentgate-mcp` serves a `verify_action` tool over stdio for MCP-speaking agents. The tool runs the same validation and decision path as the HTTP API and always returns a Decision — never a tool error the calling agent might route around. Money over MCP must be JSON strings: the transport parses JSON before AgentGate sees it, so a numeric amount is already a lossy float and is rejected into a fail-closed escalate. A CI job installs the package into a clean environment on every push and verifies a decision from it.
 
-Next milestone (post-v1): **independent source fetch** — pulling the invoice from a system of record by an identifier the agent provides, so the agent chooses *which* invoice but never *what it says*. That is the upgrade that turns consistency-checking into a real trust anchor; see the threat model above.
+- **Independent source fetch (fetch mode)** — instead of supplying evidence, a caller may send `"source": {"fetch": "INV-2026-0042"}` and the gate resolves the invoice from an operator-configured system of record (`AGENTGATE_RECORDS_DIR`, a directory of JSON records keyed by the invoice number *inside* each record — filenames are never trusted, so no path is ever built from caller input). Mixing `fetch` with caller-supplied evidence is rejected, every fetch failure (unknown invoice, unconfigured or corrupt store) fails closed to a human, and fetched decisions mark every evidence entry with a `system_of_record:` prefix so provenance is visible on the wire. The trust claim upgrade is real but scoped: it holds when the records directory is writable only by the operator, and the v1 reference store is a local directory — a live ERP/ledger connector is the remaining milestone.
 
 ## Quickstart
 
@@ -54,7 +54,20 @@ curl -s -X POST https://agentgate-api-mvob.onrender.com/verify \
                "total": {"value": "1240.00", "currency": "USD"}}}}'
 ```
 
-The response is a `block` with `"field_to_change": "proposed_action.amount"` and the exact expected value — a reason an agent can fix against and resubmit. Or use it as a library:
+The response is a `block` with `"field_to_change": "proposed_action.amount"` and the exact expected value — a reason an agent can fix against and resubmit.
+
+Or let the gate fetch the evidence itself (fetch mode — the live deploy serves a demo record, `INV-2026-0042`, from its system of record):
+
+```bash
+curl -s -X POST https://agentgate-api-mvob.onrender.com/verify \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "proposed_action": {"action_type": "approve_payment", "invoice_number": "INV-2026-0042",
+                        "amount": {"value": "3610.00", "currency": "USD"}, "vendor": "Acme Corp"},
+    "source": {"fetch": "INV-2026-0042"}}'
+```
+
+The `allow` comes back with `"evidence_used": ["system_of_record:invoice:INV-2026-0042", "system_of_record:raw_text"]` — the caller supplied only an identifier, so the evidence provably came from the operator's records. Tamper with the amount and the block's expected value is the stored truth, not anything the caller sent. Or use it as a library:
 
 ```bash
 pip install "git+https://github.com/varunk14/AgentGate.git#subdirectory=backend"
@@ -74,8 +87,8 @@ Or as an MCP server for an agent runtime (install with the `mcp` extra, then reg
 ## Architecture
 
 ```
-proposed action  +  caller-supplied evidence (structured invoice, optional raw text)
-        |
+proposed action  +  evidence: caller-supplied (structured invoice, optional raw
+        |           text) OR fetched from the operator's system of record
         v
   frame stage          is this even an approve_payment against the invoice it
         |              names?  wrong frame -> ESCALATE, score null
@@ -111,8 +124,10 @@ name, not hidden. Run it: `python -m eval.harness` from `backend/`.
 | False-positive rate | 0.500 |
 | In-scope recall | 1.000 |
 
-Known misses (out of scope by design — consistent-but-wrong sources that only
-the independent-fetch milestone can catch): `oos_doctored_source`,
+Known misses (out of scope by design — consistent-but-wrong *caller-supplied*
+sources; fetch mode exists precisely so a deployment can take the evidence out
+of the caller's hands, but the eval scores the caller-supplied path):
+`oos_doctored_source`,
 `oos_renumbered_double_bill`, `oos_unauthorized_spend`. The false positives
 are fail-closed escalations of legitimate-but-unverifiable payments (a
 declared withholding, a vendor rename, a total-only invoice, an over-threshold
@@ -134,7 +149,9 @@ uvicorn agentgate.main:app                 # GET /health, POST /verify
 ```
 
 Optional environment: `AGENTGATE_DB_PATH` points the duplicate store at a file
-(default is in-memory); `AGENTGATE_CORS_ORIGINS` grants cross-origin access to
+(default is in-memory); `AGENTGATE_RECORDS_DIR` points fetch mode at a
+directory of JSON invoice records (unset = fetch requests escalate);
+`AGENTGATE_CORS_ORIGINS` grants cross-origin access to
 exact browser origins (unset = none); `LANGFUSE_PUBLIC_KEY` /
 `LANGFUSE_SECRET_KEY` (and optionally `LANGFUSE_HOST`) enable tracing — see
 `backend/.env.example`.

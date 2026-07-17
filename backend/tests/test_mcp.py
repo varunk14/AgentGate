@@ -125,3 +125,40 @@ def test_unexpected_internal_error_fails_closed(monkeypatch):
 def test_verify_action_is_registered_as_an_mcp_tool():
     tools = asyncio.run(mcp.list_tools())
     assert "verify_action" in [t.name for t in tools]
+
+
+def test_fetch_mode_verifies_against_the_system_of_record(monkeypatch, tmp_path):
+    # Fetch mode over MCP (D45): the tool resolves the record itself; the
+    # calling agent supplies only the identifier.
+    import json as _json
+
+    from agentgate.core.system_of_record import DirectorySourceOfRecord
+
+    record = {
+        "invoice": invoice_payload(),
+        "raw_text": "Acme Corp — Invoice INV-001. Total due: $1,240.00 USD.",
+    }
+    (tmp_path / "r.json").write_text(_json.dumps(record), encoding="utf-8")
+    monkeypatch.setattr(
+        "agentgate.mcp.server._source_of_record", DirectorySourceOfRecord(tmp_path)
+    )
+    decision = verify_action(action_payload(), {"fetch": "INV-001"})
+    assert decision["decision"] == "allow"
+    assert decision["evidence_used"] == [
+        "system_of_record:invoice:INV-001",
+        "system_of_record:raw_text",
+    ]
+    assert_boundary_fields(decision)
+
+
+def test_fetch_mode_not_found_fails_closed_over_mcp(monkeypatch, tmp_path):
+    from agentgate.core.system_of_record import DirectorySourceOfRecord
+
+    monkeypatch.setattr(
+        "agentgate.mcp.server._source_of_record", DirectorySourceOfRecord(tmp_path)
+    )
+    decision = verify_action(action_payload(), {"fetch": "INV-404"})
+    assert decision["decision"] == "escalate"
+    (reason,) = decision["reasons"]
+    assert reason["check"] == "fail_closed"
+    assert "not found" in reason["message"]

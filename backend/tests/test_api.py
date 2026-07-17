@@ -479,3 +479,138 @@ def test_cors_origins_parsed_from_env(store, monkeypatch):
             },
         )
         assert resp.headers["access-control-allow-origin"] == DASHBOARD_ORIGIN
+
+
+# --- Fetch mode: independent source fetch (PRD SS0/SS9 Slice 9, D45/D46) --------
+
+RECORD_RAW_TEXT = (
+    "Acme Corp — Invoice INV-001. Widget: $1,240.00. Total due: $1,240.00 USD."
+)
+
+
+def write_record(directory, filename="record.json", *, invoice=None, raw_text=RECORD_RAW_TEXT):
+    record = {"invoice": invoice if invoice is not None else invoice_payload()}
+    if raw_text is not None:
+        record["raw_text"] = raw_text
+    (directory / filename).write_text(json.dumps(record), encoding="utf-8")
+
+
+def fetch_body(*, action: dict | None = None, fetch: str = "INV-001") -> dict:
+    return {
+        "proposed_action": action if action is not None else action_payload(),
+        "source": {"fetch": fetch},
+    }
+
+
+@pytest.fixture()
+def fetch_client(store, tmp_path):
+    from agentgate.core.system_of_record import DirectorySourceOfRecord
+
+    write_record(tmp_path)
+    app = create_app(
+        store=store,
+        tracer=NoopTracer(),
+        source_of_record=DirectorySourceOfRecord(tmp_path),
+    )
+    with TestClient(app) as c:
+        yield c
+
+
+def test_fetch_mode_allows_against_the_stored_record_with_provenance(fetch_client):
+    resp = fetch_client.post("/verify", json=fetch_body())
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["decision"] == "allow"
+    assert body["score"] == "1.00"
+    # Provenance on the wire (D45): the evidence came from the system of
+    # record, not the caller — every entry says so.
+    assert body["evidence_used"] == [
+        "system_of_record:invoice:INV-001",
+        "system_of_record:raw_text",
+    ]
+    assert len(body["checks"]) == 7
+    assert_boundary_fields(body)
+
+
+def test_fetch_mode_blocks_a_tampered_action_against_the_fetched_truth(fetch_client):
+    # The trust-anchor property: the caller supplied only an identifier, so the
+    # expected value in the block reason can only have come from the store.
+    action = action_payload(amount={"value": "12400.00", "currency": "USD"})
+    resp = fetch_client.post("/verify", json=fetch_body(action=action))
+    body = resp.json()
+    assert body["decision"] == "block"
+    (reason,) = body["reasons"]
+    assert reason["check"] == "action_amount_matches_total"
+    assert reason["block_type"] == "agent_fixable"
+    assert reason["expected"]["value"] == "1240.00"
+    assert body["evidence_used"][0].startswith("system_of_record:")
+
+
+def test_fetch_mode_unknown_invoice_fails_closed(fetch_client):
+    resp = fetch_client.post("/verify", json=fetch_body(fetch="INV-999"))
+    body = resp.json()
+    assert body["decision"] == "escalate"
+    assert body["score"] is None
+    (reason,) = body["reasons"]
+    assert reason["check"] == "fail_closed"
+    assert "not found" in reason["message"]
+    assert reason["block_type"] is None  # never agent-fixable (D31/D45)
+    assert_boundary_fields(body)
+
+
+def test_fetch_mode_without_a_configured_store_fails_closed(store, monkeypatch):
+    monkeypatch.delenv("AGENTGATE_RECORDS_DIR", raising=False)
+    with TestClient(create_app(store=store, tracer=NoopTracer())) as client:
+        resp = client.post("/verify", json=fetch_body())
+        body = resp.json()
+        assert body["decision"] == "escalate"
+        (reason,) = body["reasons"]
+        assert reason["check"] == "fail_closed"
+        assert "no system of record" in reason["message"]
+
+
+def test_fetch_mixed_with_caller_evidence_fails_closed(fetch_client):
+    body_json = fetch_body()
+    body_json["source"]["invoice"] = invoice_payload()
+    resp = fetch_client.post("/verify", json=body_json)
+    body = resp.json()
+    assert body["decision"] == "escalate"
+    (reason,) = body["reasons"]
+    assert reason["check"] == "fail_closed"
+    assert "fetch" in reason["message"]
+
+
+def test_fetch_mode_frame_check_catches_a_mismatched_action(fetch_client):
+    # The frame stage stays live in fetch mode: an action naming a different
+    # invoice than the fetched record escalates via invoice_number_match (D45).
+    action = action_payload(invoice_number="INV-002")
+    resp = fetch_client.post("/verify", json=fetch_body(action=action))
+    body = resp.json()
+    assert body["decision"] == "escalate"
+    assert body["score"] is None
+    mismatch = [c for c in body["checks"] if c["name"] == "invoice_number_match"]
+    assert mismatch and not mismatch[0]["passed"]
+
+
+def test_fetch_mode_duplicate_read_keys_on_the_fetched_number(store, tmp_path):
+    from agentgate.core.system_of_record import DirectorySourceOfRecord
+
+    write_record(tmp_path)
+    store.mark_approved("INV-001")
+    app = create_app(
+        store=store,
+        tracer=NoopTracer(),
+        source_of_record=DirectorySourceOfRecord(tmp_path),
+    )
+    with TestClient(app) as client:
+        body = client.post("/verify", json=fetch_body()).json()
+        assert body["decision"] == "escalate"
+        assert any(r["check"] == "duplicate_check" for r in body["reasons"])
+
+
+def test_caller_mode_evidence_stays_unprefixed(client):
+    # Mutation guard: an unconditional provenance prefix would claim fetched
+    # evidence for caller-supplied input — the exact lie D45 forbids.
+    body = client.post("/verify", json=verify_body()).json()
+    assert body["decision"] == "allow"
+    assert body["evidence_used"] == ["invoice:INV-001"]
