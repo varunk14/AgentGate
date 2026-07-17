@@ -4,7 +4,8 @@
 
 A pre-action reliability gate for AI agents. When an agent proposes an action that
 touches real systems ("approve invoice INV-001 for $12,500"), AgentGate checks it
-against the caller-supplied source evidence and typed policies and returns
+against the source evidence — caller-supplied, or fetched from an
+operator-controlled system of record — and typed policies, and returns
 **ALLOW / BLOCK / ESCALATE**. Blocked actions come back with a compiler-grade,
 machine-readable reason so the agent can correct itself.
 
