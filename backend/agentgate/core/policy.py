@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from .verifier import critical_check_names
 
-DEFAULT_POLICY_PATH = Path(__file__).resolve().parents[2] / "policies" / "default.yaml"
+DEFAULT_POLICY_PATH = Path(__file__).resolve().parents[1] / "policies" / "default.yaml"
 
 
 class PolicyError(ValueError):
