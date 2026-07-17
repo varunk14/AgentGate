@@ -14,3 +14,4 @@ blob-report/
 
 # Env (only committed examples belong in git)
 .env*.local
+.vercel
