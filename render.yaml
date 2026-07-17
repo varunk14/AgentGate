@@ -24,7 +24,13 @@ services:
       - key: AGENTGATE_CORS_ORIGINS
         sync: false
       # Optional Langfuse tracing (D37): unset keys = tracing is a no-op.
+      # Keys are REGION-BOUND: set LANGFUSE_HOST to the region shown in your
+      # Langfuse browser URL (e.g. https://jp.cloud.langfuse.com or
+      # https://us.cloud.langfuse.com); the SDK default is the EU host, and a
+      # region mismatch fails silently in the tracing layer.
       - key: LANGFUSE_PUBLIC_KEY
         sync: false
       - key: LANGFUSE_SECRET_KEY
+        sync: false
+      - key: LANGFUSE_HOST
         sync: false
