@@ -18,6 +18,13 @@ request after idle can take up to a minute while the backend wakes).
 
 ![The dashboard blocking a misread amount, then allowing the corrected one](docs/demo.gif)
 
+And the same gate from the agent's side — a live model (the demo agent, the
+only LLM call in the system) reads the invoices and proposes the payments
+itself; the gate allows the clean one and escalates the over-policy one to a
+human ([run it yourself](#development)):
+
+![The demo agent: a live model proposes, the gate allows one payment and escalates the other to a human](docs/agent-demo.gif)
+
 ## Status
 
 The verification core is working end to end:
@@ -172,13 +179,12 @@ pip install -e ".[agent,llm]"
 python -m agentgate.agent.demo       # reads GEMINI_API_KEY (default model)
 ```
 
-Two scenarios run: a clean invoice the model reads and the gate verifies (a
-misread comes back as a machine-fixable block the agent corrects and
-resubmits), then an invoice over the policy amount ceiling, which escalates
-and pauses for you to approve or reject. The narration reports whatever
-actually happened — nothing is scripted.
-
-![The demo agent: a live model proposes, the gate allows one payment and escalates the other to a human](docs/agent-demo.gif)
+Two scenarios run (recorded in the second GIF at the top of this README): a
+clean invoice the model reads and the gate verifies (a misread comes back as
+a machine-fixable block the agent corrects and resubmits), then an invoice
+over the policy amount ceiling, which escalates and pauses for you to approve
+or reject. The narration reports whatever actually happened — nothing is
+scripted.
 
 Run the dashboard (from `frontend/`):
 
