@@ -30,7 +30,12 @@ def call_llm(prompt: str, *, model: str | None = None) -> str:
     Raises:
         LLMRouterError: on any provider-side or configuration failure.
     """
-    model = model or os.environ.get("AGENTGATE_LLM_MODEL", "gemini/gemini-1.5-flash")
+    # Default is Google's moving alias, not a pinned version: pinned Gemini
+    # models rot (1.5 was retired; 2.5 is gated for new API keys), and a dead
+    # default leaves every deploy without AGENTGATE_LLM_MODEL set inert. The
+    # lite alias is chosen over gemini-flash-latest because the full-flash
+    # alias is routinely 503-oversubscribed on the free tier.
+    model = model or os.environ.get("AGENTGATE_LLM_MODEL", "gemini/gemini-flash-lite-latest")
     try:
         from litellm import completion  # lazy import — see docstring
     except ImportError as exc:  # pragma: no cover - exercised only outside CI
