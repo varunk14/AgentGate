@@ -163,6 +163,21 @@ exact browser origins (unset = none); `LANGFUSE_PUBLIC_KEY` /
 `LANGFUSE_SECRET_KEY` (and optionally `LANGFUSE_HOST`) enable tracing — see
 `backend/.env.example`.
 
+Watch a live model go through the gate (the demo agent — the only part of the
+system that calls an LLM; needs the `agent` and `llm` extras plus a provider
+key in the environment):
+
+```bash
+pip install -e ".[agent,llm]"
+python -m agentgate.agent.demo       # reads GEMINI_API_KEY (default model)
+```
+
+Two scenarios run: a clean invoice the model reads and the gate verifies (a
+misread comes back as a machine-fixable block the agent corrects and
+resubmits), then an invoice over the policy amount ceiling, which escalates
+and pauses for you to approve or reject. The narration reports whatever
+actually happened — nothing is scripted.
+
 Run the dashboard (from `frontend/`):
 
 ```bash
