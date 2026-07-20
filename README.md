@@ -178,6 +178,8 @@ resubmits), then an invoice over the policy amount ceiling, which escalates
 and pauses for you to approve or reject. The narration reports whatever
 actually happened — nothing is scripted.
 
+![The demo agent: a live model proposes, the gate allows one payment and escalates the other to a human](docs/agent-demo.gif)
+
 Run the dashboard (from `frontend/`):
 
 ```bash
