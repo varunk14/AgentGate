@@ -183,3 +183,7 @@ start after idle, ephemeral disk). The frontend deploys to Vercel from
 `NEXT_PUBLIC_AGENTGATE_API` set to the backend URL, then set that Vercel
 origin in the backend's `AGENTGATE_CORS_ORIGINS`.
 
+## License
+
+MIT — see `LICENSE`.
+
