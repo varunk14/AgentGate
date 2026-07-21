@@ -130,6 +130,58 @@ def test_cap_exhausted_stops_and_escalates_to_human():
     assert outcome.final_decision.decision is DecisionType.block  # verdict NOT rewritten (D25)
 
 
+# --- a malformed fixer value fails closed, never crashes the loop (D11) ------
+def test_fixer_returning_non_money_escalates_not_crashes():
+    # A fixer that returns a non-Money value (the natural LLM mistake) must not be
+    # written unvalidated into the action and crash the next decide() — it fails
+    # closed to a human.
+    def _bad_fixer(invoice, action, reason):
+        return "not-a-money-object"
+
+    outcome = run_with_retry(
+        make_invoice(total="1240.00"), make_action(amount="12400.00"),
+        propose_value=_bad_fixer,
+    )
+    assert outcome.resolution is Resolution.escalated_to_human
+    assert outcome.final_decision.decision is DecisionType.block  # D25
+
+
+# --- the fixer allowlist forbids drifting action_type/invoice_number (D30) ----
+def _fixable_block_naming(field: str) -> Decision:
+    return Decision(
+        decision=DecisionType.block, score=1,
+        checks=[Check(name="c", type=CheckKind.critical, passed=False, detail="")],
+        reasons=[BlockReason(check="c", expected=m("1240.00"),
+                             field_to_change=field, block_type=BlockType.agent_fixable,
+                             message="x")],
+    )
+
+
+def test_fixer_cannot_change_action_type_or_invoice_number():
+    for field in ("proposed_action.action_type", "proposed_action.invoice_number",
+                  "proposed_action.adjustments"):
+        outcome = run_with_retry(
+            make_invoice(), make_action(),
+            decide_fn=_const_decision(_fixable_block_naming(field)),
+        )
+        assert outcome.resolution is Resolution.escalated_to_human, field
+        assert outcome.attempts == 1  # unfixable -> no resubmit
+
+
+# --- is_duplicate is threaded through every resubmission ----------------------
+def test_duplicate_flag_survives_the_fix_and_escalates():
+    # Amount misread (BLOCK wins) on a duplicate invoice. After the amount is
+    # fixed, the resubmission still carries is_duplicate=True, so the duplicate
+    # escalate surfaces — a dropped flag would resolve `allowed`, a double-pay.
+    outcome = run_with_retry(
+        make_invoice(total="1240.00"), make_action(amount="12400.00"),
+        is_duplicate=True,
+    )
+    assert outcome.resolution is Resolution.escalated_by_gate
+    assert outcome.final_decision.decision is DecisionType.escalate
+    assert any(r.check == "duplicate_check" for r in outcome.final_decision.reasons)
+
+
 # --- D25: in every escalated_to_human case, the verdict stays BLOCK ----------
 def test_verdict_never_rewritten():
     for stub in (_unfixable_block(), _persistent_fixable_block()):

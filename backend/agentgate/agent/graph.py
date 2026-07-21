@@ -122,6 +122,7 @@ def build_agent(*, llm_call: Callable[[str], str] = call_llm, policy: Policy = D
             invoice,
             action,
             max_attempts=policy.retry.max_attempts,
+            policy=policy,  # thread the full policy so its escalation thresholds govern the loop
             propose_value=_make_reproposer(llm_call),
         )
         update: dict = {

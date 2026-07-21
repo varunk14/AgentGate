@@ -127,8 +127,10 @@ def _run_scenario(
     if state.get("error"):
         out(f"  proposal failed closed to a human: {state['error']}")
     attempts = state.get("attempts") or 0
-    if attempts > 1:
+    if attempts > 1 and state.get("outcome") == "allowed":
         out(f"  (the gate blocked a misread and the agent corrected it: {attempts} submissions)")
+    elif attempts > 1:
+        out(f"  (the agent retried {attempts} submissions but could not self-correct)")
     _render_decision(state.get("decision"), out)
 
     if "__interrupt__" in state:

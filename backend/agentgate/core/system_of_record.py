@@ -101,7 +101,17 @@ class DirectorySourceOfRecord:
         return match
 
     def _load_record(self, file: Path) -> Source:
+        # Only regular files are records. A non-regular entry matching *.json — a
+        # FIFO, socket, or a symlink to a device like /dev/zero — would otherwise
+        # block or stream unboundedly on read; since resolve happens on the event
+        # loop, one such file would hang the whole server. Reject it (fail the
+        # fetch closed) rather than trust it.
         try:
+            if not file.is_file():
+                raise SourceOfRecordError(
+                    f"record file {file.name} is not a regular file; ignoring is "
+                    "unsafe (it may be the requested record) — fix the store."
+                )
             size = file.stat().st_size
         except OSError as exc:
             raise SourceOfRecordError(
@@ -112,9 +122,18 @@ class DirectorySourceOfRecord:
                 f"record file {file.name} is {size} bytes (max {MAX_RECORD_BYTES})."
             )
         try:
+            # Read is capped independently of the stat above (TOCTOU: a file that
+            # grows between stat and read must still be bounded), so an oversized or
+            # never-ending read can never exhaust memory.
+            with file.open("r", encoding="utf-8") as handle:
+                text = handle.read(MAX_RECORD_BYTES + 1)
+            if len(text) > MAX_RECORD_BYTES:
+                raise SourceOfRecordError(
+                    f"record file {file.name} exceeds {MAX_RECORD_BYTES} bytes."
+                )
             # parse_float=Decimal: D1 applies to disk — a stored numeric
             # 1240.00 stays the exact Decimal of its literal text (D35/D46).
-            payload = json.loads(file.read_text(encoding="utf-8"), parse_float=Decimal)
+            payload = json.loads(text, parse_float=Decimal)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise SourceOfRecordError(
                 f"record file {file.name} is not valid JSON ({type(exc).__name__})."

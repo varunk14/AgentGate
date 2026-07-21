@@ -27,9 +27,29 @@ from agentgate.core.tracing import Tracer, build_tracer
 logger = logging.getLogger("agentgate.main")
 
 
+def _sanitized_origins(origins: object) -> list[str]:
+    """Drop empties and reject the ``*`` wildcard (D40: cross-origin access is
+    granted only to explicit origins, never ``*`` — a wildcard with the API's
+    decisions readable by any site is exactly the exposure the allowlist exists to
+    prevent). A stray ``*`` is ignored with a warning, not honored."""
+    result: list[str] = []
+    for origin in origins:
+        origin = origin.strip()
+        if not origin:
+            continue
+        if origin == "*":
+            logger.warning(
+                "AGENTGATE_CORS_ORIGINS contains '*'; ignoring it — wildcard CORS is "
+                "never allowed (D40). List explicit scheme+host+port origins instead."
+            )
+            continue
+        result.append(origin)
+    return result
+
+
 def _cors_origins_from_env() -> list[str]:
     raw = os.environ.get("AGENTGATE_CORS_ORIGINS", "")
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    return _sanitized_origins(raw.split(","))
 
 
 def create_app(
@@ -73,7 +93,7 @@ def create_app(
         source_of_record if source_of_record is not None else build_source_of_record()
     )
 
-    origins = _cors_origins_from_env() if cors_origins is None else [o for o in cors_origins if o]
+    origins = _cors_origins_from_env() if cors_origins is None else _sanitized_origins(cors_origins)
     if origins:
         app.add_middleware(
             CORSMiddleware,

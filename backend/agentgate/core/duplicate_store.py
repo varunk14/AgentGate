@@ -69,6 +69,13 @@ class DuplicateStore:
                     "refusing to record it again (possible double-payment or a "
                     "caller bug — v1 has no replay path)."
                 ) from exc
+            except sqlite3.Error:
+                # Any other DB error (disk full, I/O, cross-process lock) must also
+                # roll back: the implicit transaction holds a RESERVED lock, and on
+                # a shared file store an un-rolled-back failure wedges every other
+                # writer with "database is locked". Re-raise after clearing it.
+                self._conn.rollback()
+                raise
             self._conn.commit()
 
     def close(self) -> None:

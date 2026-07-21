@@ -69,6 +69,22 @@ def write_record(
     return path
 
 
+def test_non_regular_record_entry_fails_the_fetch(tmp_path):
+    # A directory (or FIFO/socket) named *.json is not a record; it must fail the
+    # fetch closed, never be read (a FIFO read would hang the event loop).
+    write_record(tmp_path, "real.json")  # a valid INV-001 record exists alongside
+    (tmp_path / "trap.json").mkdir()
+    with pytest.raises(SourceOfRecordError, match="not a regular file"):
+        DirectorySourceOfRecord(tmp_path).fetch("INV-001")
+
+
+def test_oversized_record_file_is_capped(tmp_path):
+    big = tmp_path / "big.json"
+    big.write_text(" " * (MAX_RECORD_BYTES + 10) + "{}", encoding="utf-8")
+    with pytest.raises(SourceOfRecordError):
+        DirectorySourceOfRecord(tmp_path).fetch("INV-001")
+
+
 # --- Source: the caller-XOR-fetch union (D45) -----------------------------------
 
 

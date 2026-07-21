@@ -130,3 +130,50 @@ def test_malformed_reproposal_fails_closed():
     state = graph.get_state(_cfg("t6")).values
     assert state["decision"]["decision"] == "block"  # unfixable -> human, verdict intact
     assert state["attempts"] == 1  # the failed re-proposal did not burn a resubmit
+
+
+# --- human approval is fail-closed: ONLY an exact "approve" approves ----------
+def test_human_approval_requires_exact_approve():
+    # Anything that is not "approve" must reject (fail-closed). This pins the match
+    # against a lenient "improvement" (e.g. `!= "reject"` or substring matching)
+    # that would approve garbage — "yes", "", "approve it", or "do not approve".
+    for reply in ("yes", "", "approve it", "do not approve", "reject"):
+        router = scripted_router(_propose_json("1240.00", currency="EUR"))
+        graph = build_agent(llm_call=router)
+        thread = f"approve-{reply or 'empty'}"
+        graph.invoke(initial_state(make_invoice(total="1240.00")), _cfg(thread))
+        final = graph.invoke(Command(resume=reply), _cfg(thread))
+        assert final["outcome"] == "rejected_by_human", f"reply {reply!r} must NOT approve"
+        assert final["decision"]["decision"] == "escalate"  # verdict intact (D25)
+
+
+def test_exact_approve_still_approves():
+    router = scripted_router(_propose_json("1240.00", currency="EUR"))
+    graph = build_agent(llm_call=router)
+    graph.invoke(initial_state(make_invoice(total="1240.00")), _cfg("approve-ok"))
+    final = graph.invoke(Command(resume="approve"), _cfg("approve-ok"))
+    assert final["outcome"] == "approved_by_human"
+
+
+# --- a stricter injected policy actually governs the agent's gate -------------
+def test_build_agent_policy_threshold_is_honored():
+    # A clean, self-consistent $6000 payment allows under the default policy, but a
+    # policy with amount_greater_than=5000 must make the SAME agent escalate — proof
+    # the injected policy's thresholds reach decide() inside the retry loop.
+    from decimal import Decimal
+
+    from agentgate.core.policy import DEFAULT_POLICY, Policy, RetryPolicy
+
+    strict = Policy(
+        amount_greater_than=Decimal("5000"),
+        score_below=DEFAULT_POLICY.score_below,
+        critical_checks=DEFAULT_POLICY.critical_checks,
+        retry=RetryPolicy(max_attempts=DEFAULT_POLICY.retry.max_attempts),
+    )
+    router = scripted_router(_propose_json("6000.00"))
+    graph = build_agent(llm_call=router, policy=strict)
+    graph.invoke(initial_state(make_invoice(total="6000.00")), _cfg("pol"))
+    assert _paused_at_human(graph, "pol")
+    values = graph.get_state(_cfg("pol")).values
+    assert values["decision"]["decision"] == "escalate"
+    assert any(r["check"] == "policy_amount_threshold" for r in values["decision"]["reasons"])

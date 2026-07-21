@@ -30,10 +30,20 @@ from __future__ import annotations
 from enum import Enum
 from typing import Callable, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from .decision import decide
+from .policy import Policy
 from .schemas import BlockReason, BlockType, Decision, DecisionType, Invoice, ProposedAction
+
+# The ONLY proposed_action fields a value-only fixer may change (D30). Deliberately
+# NOT "every field": action_type / invoice_number / adjustments / agent_rationale
+# must never be rewritten by a fixer — changing action_type or invoice_number would
+# drift the frame the checks read, and injecting an adjustment would flip a fixable
+# BLOCK into an ESCALATE, burning a human on a self-correctable slip (D3 inverted).
+# v1's gate only ever emits an agent_fixable reason naming `amount`; `vendor` is
+# listed for the reason a future check could legitimately name it.
+_FIXABLE_FIELDS = frozenset({"amount", "vendor"})
 
 # A value-only fixer: given the invoice, current action, and the agent-fixable
 # block reason, return the new value for the field the reason names (a Money for
@@ -72,7 +82,7 @@ def _fixable_field(reason: Optional[BlockReason]) -> str:
     if (
         len(parts) != 2
         or parts[0] != "proposed_action"
-        or parts[1] not in ProposedAction.model_fields
+        or parts[1] not in _FIXABLE_FIELDS
     ):
         raise UnfixableBlockError(
             f"Block reason names a field the caller cannot change: "
@@ -115,6 +125,7 @@ def run_with_retry(
     *,
     is_duplicate: bool = False,
     max_attempts: int = 2,
+    policy: Optional[Policy] = None,
     decide_fn: Callable[..., Decision] = decide,
     propose_value: ProposeValue = _deterministic_value,
 ) -> RetryOutcome:
@@ -123,9 +134,15 @@ def run_with_retry(
     unfixable BLOCK stops immediately (no pointless resubmit). ``decide_fn`` and
     ``propose_value`` are injectable: the default fixer is deterministic (the
     gate's expected value); the agent injects an LLM re-proposer that must raise
-    ``UnfixableBlockError`` to give up (e.g. on malformed output)."""
+    ``UnfixableBlockError`` to give up (e.g. on malformed output).
+
+    ``policy`` is threaded into every ``decide_fn`` call so a caller's escalation
+    thresholds (amount ceiling, score floor) actually govern the loop; when None
+    the gate uses its own default. Passed only when set, so a custom ``decide_fn``
+    that does not accept a ``policy`` kwarg still works."""
+    extra = {} if policy is None else {"policy": policy}
     current = action
-    decision = decide_fn(invoice, current, is_duplicate=is_duplicate)
+    decision = decide_fn(invoice, current, is_duplicate=is_duplicate, **extra)
     history: list[Decision] = [decision]
 
     resubmissions = 0
@@ -136,11 +153,19 @@ def run_with_retry(
         try:
             field = _fixable_field(reason)  # the loop owns which field changes
             value = propose_value(invoice, current, reason)  # fixer returns only the value
-            current = current.model_copy(update={field: value})
-        except UnfixableBlockError:
+            # Re-validate the whole action through the schema so a fixer that
+            # returns a malformed value (a raw dict, a negative/oversized amount, a
+            # bare string) fails closed to a human instead of being written
+            # unvalidated and crashing the next decide() — model_copy does NOT
+            # re-run validators (pydantic v2). Building via the dump avoids
+            # constructing an invalid intermediate model.
+            data = current.model_dump()
+            data[field] = value
+            current = ProposedAction.model_validate(data)
+        except (UnfixableBlockError, ValidationError, ValueError, TypeError, KeyError):
             break  # stop immediately at escalated_to_human; do not burn attempts
         resubmissions += 1
-        decision = decide_fn(invoice, current, is_duplicate=is_duplicate)
+        decision = decide_fn(invoice, current, is_duplicate=is_duplicate, **extra)
         history.append(decision)
 
     return RetryOutcome(
