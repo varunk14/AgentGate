@@ -35,19 +35,32 @@ def parse_llm_json(raw: str) -> dict:
     ``ExtractionError`` if no valid JSON object can be recovered (e.g. truncated
     output with no closing brace).
     """
-    if raw is None:
-        raise ExtractionError("LLM returned no content.")
+    if not isinstance(raw, str):
+        # None, bytes, or a provider's content-parts list — anything non-text
+        # fails closed here rather than crashing on ``.find`` with an untyped
+        # AttributeError the caller's ExtractionError catch would miss (D11).
+        raise ExtractionError(
+            f"LLM returned non-text content ({type(raw).__name__})."
+        )
     start = raw.find("{")
     end = raw.rfind("}")
     if start == -1 or end == -1 or end < start:
         raise ExtractionError("No JSON object found in LLM output.")
     candidate = raw[start : end + 1]
-    candidate = _TRAILING_COMMA_RE.sub(r"\1", candidate)
+    # Parse the candidate verbatim FIRST, so valid JSON is never rewritten: the
+    # trailing-comma repair is a blunt regex that would also delete a comma inside
+    # a string literal (e.g. a vendor "Acme, ] Inc" or free-prose rationale),
+    # silently corrupting a value the layer exists to recover faithfully. Only if
+    # strict parsing fails do we attempt the repair.
+    # parse_float=Decimal: never construct a float for a money value (D1).
     try:
-        # parse_float=Decimal: never construct a float for a money value (D1).
         data = json.loads(candidate, parse_float=Decimal)
-    except json.JSONDecodeError as exc:
-        raise ExtractionError(f"LLM output is not valid JSON: {exc}") from exc
+    except json.JSONDecodeError:
+        repaired = _TRAILING_COMMA_RE.sub(r"\1", candidate)
+        try:
+            data = json.loads(repaired, parse_float=Decimal)
+        except json.JSONDecodeError as exc:
+            raise ExtractionError(f"LLM output is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise ExtractionError("LLM output JSON is not an object.")
     return data

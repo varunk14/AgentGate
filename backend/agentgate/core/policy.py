@@ -96,10 +96,33 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Policy:
             "Remove block_if."
         )
 
+    # Reject unknown/misspelled keys (fail-closed, D28's inert-config doctrine): a
+    # typo like `amount_greater_then` would otherwise be silently dropped, leaving
+    # the operator's intended escalation threshold unset — a gate quietly WEAKER
+    # than its written config. An inert config key is worse than none.
+    unknown_top = set(raw) - {"escalate_if", "retry", "critical_checks", "block_if"}
+    if unknown_top:
+        raise PolicyError(
+            f"unknown top-level policy keys: {sorted(unknown_top)}. "
+            "Allowed: escalate_if, retry, critical_checks."
+        )
+
     escalate_if = raw.get("escalate_if") or {}
     retry = raw.get("retry") or {}
     if not isinstance(escalate_if, dict) or not isinstance(retry, dict):
         raise PolicyError("escalate_if and retry must be mappings.")
+
+    unknown_escalate = set(escalate_if) - {"amount_greater_than", "score_below"}
+    if unknown_escalate:
+        raise PolicyError(
+            f"unknown escalate_if keys: {sorted(unknown_escalate)}. "
+            "Allowed: amount_greater_than, score_below."
+        )
+    unknown_retry = set(retry) - {"max_attempts"}
+    if unknown_retry:
+        raise PolicyError(
+            f"unknown retry keys: {sorted(unknown_retry)}. Allowed: max_attempts."
+        )
 
     try:
         policy = Policy(

@@ -84,6 +84,109 @@ def _normalized_currency(v: str) -> str:
     return v
 
 
+# A generous magnitude ceiling for a caller-supplied amount (a quintillion). Like
+# the length bounds above it is a "generous ceiling, not format validation" (D34):
+# it keeps every amount — and every sum of up to MAX_LINE_ITEMS+MAX_TAX_LINES of
+# them — inside the 28-significant-digit Decimal context, so structural_arithmetic
+# stays EXACT (never silently rounds a real discrepancy away) and can never trip a
+# decimal overflow. It lives on the CALLER models (Invoice/ProposedAction), never
+# on Money itself, because the verifier legitimately builds a Money from a computed
+# sum that may be negative or larger than any single input.
+_AMOUNT_MAX = Decimal("1e18")
+
+
+def _coerce_decimal(v: object, field_name: str) -> object:
+    """Shared numeric coercion for every Decimal wire field (``Money.value``,
+    ``quantity``, ``TaxLine.rate``): reject bool/float (D1), cap the raw length
+    BEFORE the parse, parse strings / ints / already-decoded Decimals to Decimal,
+    then require the result to be finite and bounded in significant and fractional
+    digits.
+
+    The digit caps are the D34 bound applied on EVERY entry path, not just the
+    string one. A JSON number decoded upstream with ``parse_float=Decimal`` reaches
+    a validator as a ``Decimal`` and a JSON integer reaches it as an ``int`` — both
+    previously skipped the 50-char string cap and could ride a multi-thousand-digit
+    value into check details, the Decision echo, and Langfuse traces."""
+    if isinstance(v, bool):  # bool is an int subclass — not a number here
+        raise ValueError(f"{field_name} must be a number, not a bool.")
+    if isinstance(v, float):
+        raise ValueError(
+            f"{field_name} must be a string or int, never float "
+            "(float introduces rounding error; see DECISIONS D1)."
+        )
+    if isinstance(v, str):
+        s = v.strip()
+        if len(s) > MAX_NUMERIC_CHARS:
+            # Report the length, never the value — this can end up in a
+            # fail-closed reason (D34).
+            raise ValueError(
+                f"{field_name} string is too long ({len(s)} characters, "
+                f"max {MAX_NUMERIC_CHARS})."
+            )
+        try:
+            d = Decimal(s)
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError(f"{field_name} is not a valid decimal: {s!r}") from exc
+    elif isinstance(v, int):
+        s = str(v)
+        if len(s) > MAX_NUMERIC_CHARS:
+            raise ValueError(
+                f"{field_name} integer is too long ({len(s)} digits, "
+                f"max {MAX_NUMERIC_CHARS})."
+            )
+        d = Decimal(v)
+    elif isinstance(v, Decimal):
+        d = v
+    else:
+        return v  # unknown type: let pydantic raise its own typed error
+    if not d.is_finite():
+        # Belt to pydantic-core's own non-finite rejection: a NaN reaching a
+        # comparison downstream raises InvalidOperation, which would escape an
+        # ``except ValidationError`` fail-closed catch (D34's TaxLine.rate lesson).
+        raise ValueError(f"{field_name} must be a finite number (no NaN/Infinity).")
+    _, digits, exp = d.as_tuple()
+    if len(digits) > MAX_NUMERIC_CHARS:
+        raise ValueError(
+            f"{field_name} has too many significant digits "
+            f"({len(digits)}, max {MAX_NUMERIC_CHARS})."
+        )
+    if -exp > MAX_NUMERIC_CHARS:
+        raise ValueError(
+            f"{field_name} has too many fractional digits (max {MAX_NUMERIC_CHARS})."
+        )
+    return d
+
+
+def _adjustment_json_default(o: object) -> str:
+    """``json.dumps`` fallback for the adjustments size check: rescue only
+    ``Decimal`` (a JSON number decoded upstream with ``parse_float=Decimal``) so
+    numeric adjustments are bounded identically on the HTTP and MCP boundaries.
+    Anything else is genuinely un-echoable and must still raise (it would crash
+    the later ``model_dump`` of the Decision echo)."""
+    if isinstance(o, Decimal):
+        return str(o)
+    raise TypeError(f"adjustment value of type {type(o).__name__} is not serializable")
+
+
+def _require_bounded_amount(value: Decimal, field_name: str) -> None:
+    """A caller-supplied amount must be non-negative and within ``_AMOUNT_MAX``.
+
+    Negative amounts are credit notes / refunds — explicitly out of scope in v1
+    (PRD SS7): reject them so they fail closed to ESCALATE rather than sailing to
+    ALLOW as an ordinary payment (a self-consistent negative invoice otherwise
+    scores 1.0). The magnitude ceiling keeps sums exact and overflow-free. ``value``
+    is already finite (``_coerce_decimal``), so the comparisons cannot raise."""
+    if value < 0:
+        raise ValueError(
+            f"{field_name} must not be negative ({value}); credit notes and refunds "
+            "are out of scope in v1 — route to a human."
+        )
+    if value >= _AMOUNT_MAX:
+        raise ValueError(
+            f"{field_name} exceeds the maximum supported magnitude ({_AMOUNT_MAX})."
+        )
+
+
 class Money(BaseModel):
     """A monetary amount. ``value`` is a ``Decimal`` parsed from a string/int;
     ``currency`` is first-class and required (DECISIONS D1/D12)."""
@@ -96,35 +199,14 @@ class Money(BaseModel):
     @field_validator("value", mode="before")
     @classmethod
     def _no_float(cls, v: object) -> object:
-        """Reject float outright and parse strings explicitly to Decimal.
+        """Reject float, parse to Decimal, and bound precision on every entry path.
 
-        Floats are refused because they carry rounding error (D1). JSON should
-        be decoded with ``parse_float=Decimal`` upstream so a float never even
-        reaches here; this validator is the defensive backstop.
-        """
-        if isinstance(v, bool):  # bool is an int subclass — not a valid amount
-            raise ValueError("Money.value must be a number, not a bool.")
-        if isinstance(v, float):
-            raise ValueError(
-                "Money.value must be a string or int, never float "
-                "(float introduces rounding error; see DECISIONS D1)."
-            )
-        if isinstance(v, str):
-            v = v.strip()
-            if len(v) > MAX_NUMERIC_CHARS:
-                # Report the length, never the value — this message can end up
-                # in a fail-closed reason (D34).
-                raise ValueError(
-                    f"Money.value string is too long ({len(v)} characters, "
-                    f"max {MAX_NUMERIC_CHARS})."
-                )
-            try:
-                return Decimal(v)
-            except (InvalidOperation, ValueError) as exc:
-                raise ValueError(f"Money.value is not a valid decimal: {v!r}") from exc
-        if isinstance(v, int):
-            return Decimal(v)
-        return v
+        Floats are refused because they carry rounding error (D1); JSON should be
+        decoded with ``parse_float=Decimal`` upstream so a float never reaches
+        here. The magnitude/sign bound lives on the caller models, not here —
+        ``Money`` is also constructed internally from computed sums that may be
+        negative or large (see ``_coerce_decimal`` / ``_require_bounded_amount``)."""
+        return _coerce_decimal(v, "Money.value")
 
     @field_validator("currency")
     @classmethod
@@ -154,23 +236,8 @@ class LineItem(BaseModel):
         """Quantity is ``Decimal`` (fractional billing — 2.5 hours, 1.5 kg — is
         legitimate) parsed from a string or int, never float (D1/D29). It is
         consumed by no check, so widening it only stops rejecting valid invoices.
-        """
-        if isinstance(v, bool):  # bool is an int subclass — not a valid quantity
-            raise ValueError("quantity must be a number, not a bool.")
-        if isinstance(v, float):
-            raise ValueError("quantity must be a string or int, never float (D1).")
-        if isinstance(v, str):
-            v = v.strip()
-            if len(v) > MAX_NUMERIC_CHARS:
-                raise ValueError(
-                    f"quantity string is too long ({len(v)} characters, "
-                    f"max {MAX_NUMERIC_CHARS})."
-                )
-            try:
-                return Decimal(v)
-            except (InvalidOperation, ValueError) as exc:
-                raise ValueError(f"quantity is not a valid decimal: {v!r}") from exc
-        return v
+        Bounds (incl. the JSON int/Decimal paths) come from ``_coerce_decimal``."""
+        return _coerce_decimal(v, "quantity")
 
 
 class TaxLine(BaseModel):
@@ -182,23 +249,11 @@ class TaxLine(BaseModel):
     @field_validator("rate", mode="before")
     @classmethod
     def _rate_no_float(cls, v: object) -> object:
-        if isinstance(v, float):
-            raise ValueError("tax rate must be a string, never float (D1).")
-        if isinstance(v, str):
-            v = v.strip()
-            if len(v) > MAX_NUMERIC_CHARS:
-                raise ValueError(
-                    f"tax rate string is too long ({len(v)} characters, "
-                    f"max {MAX_NUMERIC_CHARS})."
-                )
-            try:
-                return Decimal(v)
-            except (InvalidOperation, ValueError) as exc:
-                # Without this catch a junk rate escapes model_validate as a
-                # raw InvalidOperation, bypassing an `except ValidationError`
-                # fail-closed catch at the API boundary (D34).
-                raise ValueError(f"tax rate is not a valid decimal: {v!r}") from exc
-        return v
+        """Tax rate is ``Decimal``, never float (D1). ``_coerce_decimal`` also caps
+        length/precision and rejects NaN/Infinity on every entry path — without
+        that a junk rate escaped ``model_validate`` as a raw ``InvalidOperation``,
+        bypassing an ``except ValidationError`` fail-closed catch (D34)."""
+        return _coerce_decimal(v, "tax rate")
 
 
 class Invoice(BaseModel):
@@ -226,6 +281,23 @@ class Invoice(BaseModel):
     @classmethod
     def _normalize_currency(cls, v: str) -> str:
         return _normalized_currency(v)
+
+    @model_validator(mode="after")
+    def _amounts_bounded(self) -> "Invoice":
+        """Every caller-supplied amount is non-negative and within ``_AMOUNT_MAX``
+        (negative = out-of-scope credit note; huge = arithmetic/precision hazard).
+        Enforced on the whole document at once so the arithmetic inputs
+        (``total``, line amounts, tax amounts) are all bounded before the verifier
+        sums them."""
+        _require_bounded_amount(self.total.value, "invoice.total")
+        if self.subtotal is not None:
+            _require_bounded_amount(self.subtotal.value, "invoice.subtotal")
+        for i, li in enumerate(self.line_items):
+            _require_bounded_amount(li.amount.value, f"line_items[{i}].amount")
+            _require_bounded_amount(li.unit_price.value, f"line_items[{i}].unit_price")
+        for i, tl in enumerate(self.tax_lines):
+            _require_bounded_amount(tl.amount.value, f"tax_lines[{i}].amount")
+        return self
 
 
 class ActionType(str, Enum):
@@ -258,12 +330,21 @@ class ProposedAction(BaseModel):
         """Adjustments are declared, unverified labels (D13) echoed verbatim in
         the Decision, so bound their count and per-item serialized size while
         staying shape-agnostic — typing them now would speculate on the deferred
-        adjustment-verification milestone (D34)."""
+        adjustment-verification milestone (D34).
+
+        The ``Decimal`` default keeps the size check identical across both
+        boundaries: over HTTP a numeric adjustment is decoded with
+        ``parse_float=Decimal`` and would otherwise make ``json.dumps`` raise
+        ``TypeError`` on the ``Decimal`` — so the same ``[{"delta": 1.5}]`` that the
+        MCP boundary accepts (and routes to a declared-adjustment ESCALATE, D13)
+        would spuriously fail-close over HTTP. Only ``Decimal`` is rescued;
+        genuinely un-echoable values still raise (they would otherwise crash the
+        later ``model_dump`` of the Decision echo)."""
         if len(v) > MAX_ADJUSTMENTS:
             raise ValueError(f"adjustments has {len(v)} items (max {MAX_ADJUSTMENTS}).")
         for i, item in enumerate(v):
             try:
-                encoded = json.dumps(item)
+                encoded = json.dumps(item, default=_adjustment_json_default)
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"adjustments[{i}] is not JSON-serializable.") from exc
             if len(encoded) > MAX_ADJUSTMENT_CHARS:
@@ -272,6 +353,14 @@ class ProposedAction(BaseModel):
                     f"(max {MAX_ADJUSTMENT_CHARS})."
                 )
         return v
+
+    @model_validator(mode="after")
+    def _amount_bounded(self) -> "ProposedAction":
+        """The proposed payment amount is non-negative and within ``_AMOUNT_MAX``
+        (a negative amount is an out-of-scope credit note, not an ordinary
+        payment; see ``_require_bounded_amount``)."""
+        _require_bounded_amount(self.amount.value, "proposed_action.amount")
+        return self
 
 
 class CheckKind(str, Enum):

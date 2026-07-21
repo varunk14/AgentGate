@@ -18,22 +18,27 @@ import re
 from decimal import Decimal, InvalidOperation
 
 # A money-shaped token:
-#   - left boundary: not preceded by an alphanumeric, '.', ',', '/', or '-'
-#     (so we never start mid-identifier like INV-31240 or mid-number/date)
+#   - left boundary: not preceded by an alphanumeric, '.', ',', '/', '+', or '-'
+#     (so we never start mid-identifier like INV-31240, mid-number/date, or after
+#     an exponent sign)
 #   - optional currency symbol
 #   - digits with either grouped thousands (1,240 / 11,240.00) or plain (1240.00)
-#   - right boundary: not followed by more digits reachable through word/./-/,//
-#     chars (kills dates 12/40 and identifiers) and not followed by a letter
+#   - right boundary: not followed by more digits reachable through word/./-/,//+
+#     chars — this kills dates 12/40, identifiers, the fractional half of a
+#     decimal-comma amount (1240,50 must NOT yield a bare 1240), and scientific
+#     notation (1E+3 must NOT yield a bare 1 or 3). The ',' and '+' belong in BOTH
+#     boundary classes; omitting them from the right side let a misread European
+#     total false-ground and slip past the decisive total-grounding gate (D27).
 _MONEY_TOKEN_RE = re.compile(
     r"""
-    (?<![\w.,/-])                       # left boundary
+    (?<![\w.,/+-])                      # left boundary
     [$€£]?\s?                           # optional currency symbol
     (?P<num>
         \d{1,3}(?:,\d{3})+(?:\.\d+)?    # grouped thousands: 1,240 or 11,240.00
         |
         \d+(?:\.\d+)?                   # plain: 1240 or 1240.00
     )
-    (?![\w/.-]*\d)                      # right boundary: no following digit
+    (?![\w/.,+-]*\d)                    # right boundary: no following digit
     (?![A-Za-z_])                       # not followed by a letter/underscore
     """,
     re.VERBOSE,

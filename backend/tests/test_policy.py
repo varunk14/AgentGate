@@ -88,6 +88,34 @@ def test_thresholds_are_exact_decimal_not_float(tmp_path):
     assert isinstance(policy.amount_greater_than, Decimal)
 
 
+def test_misspelled_escalate_key_is_rejected(tmp_path):
+    # A typo like `amount_greater_then` would silently leave the threshold unset —
+    # a gate quietly weaker than the written config. The loader must reject it.
+    with pytest.raises(PolicyError, match="amount_greater_then|unknown escalate_if"):
+        load_policy(_write(
+            tmp_path,
+            "escalate_if:\n  amount_greater_then: 500\n  score_below: 0.80\n" + _CRITICAL + _RETRY,
+        ))
+
+
+def test_unknown_top_level_key_is_rejected(tmp_path):
+    with pytest.raises(PolicyError, match="unknown top-level"):
+        load_policy(_write(
+            tmp_path,
+            "esclate_if:\n  amount_greater_than: 500\n" + _CRITICAL + _RETRY
+            + "escalate_if:\n  amount_greater_than: 10000\n",
+        ))
+
+
+def test_unknown_retry_key_is_rejected(tmp_path):
+    with pytest.raises(PolicyError, match="unknown retry"):
+        load_policy(_write(
+            tmp_path,
+            "escalate_if:\n  amount_greater_than: 10000\n" + _CRITICAL
+            + "retry:\n  max_attemps: 2\n",
+        ))
+
+
 # --- amount threshold -> ESCALATE, in the non-BLOCK branch only ---------------
 def test_amount_over_threshold_escalates():
     decision = decide(consistent_invoice("20000.00"), action_for("20000.00"))

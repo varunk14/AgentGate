@@ -64,6 +64,36 @@ def make_action(*, amount: str = "1240.00", currency: str = "USD", vendor: str =
     )
 
 
+def test_negative_amount_is_out_of_scope_not_allowed():
+    # A self-consistent NEGATIVE invoice (a credit note) is out of v1 scope and
+    # must fail closed at the schema, never sail to ALLOW as a normal payment.
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        make_invoice(
+            total="-1000.00",
+            line_items=[
+                LineItem(description="Credit", quantity=1, unit_price=m("-1000.00"),
+                         amount=m("-1000.00"), kind=LineItemKind.charge),
+            ],
+        )
+    with pytest.raises(ValidationError):
+        make_action(amount="-1000.00")
+
+
+def test_oversized_amount_fails_closed_not_overflow():
+    # A magnitude beyond the ceiling must be rejected at the schema, never reach
+    # the verifier's Decimal arithmetic (where a huge exponent overflows/crashes).
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        make_action(amount="1E+1000000")
+    with pytest.raises(ValidationError):
+        make_invoice(total="1000000000000000000000")  # 1e21, over the 1e18 ceiling
+
+
 # --- GATE: tampered amount -> BLOCK with typed payload ------------------------
 def test_tampered_amount_blocks():
     # invoice total 1240.00, agent proposes 12400.00 (a decimal slip), no adjustment.

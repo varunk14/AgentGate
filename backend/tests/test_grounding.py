@@ -67,6 +67,24 @@ def test_is_grounded_matches_across_formats():
     assert not is_grounded(Decimal("1240"), "Order INV-31240 total 12/40")
 
 
+def test_decimal_comma_is_not_a_left_partial_match():
+    # A European decimal-comma amount 1240,50 must NOT tokenize to 1240: the
+    # digits before the comma are a fractional part, not a standalone total.
+    # This is the anti-substring guard (D21) on the RIGHT boundary — the mirror
+    # of INV-31240 on the left. A false 1240 token would let a misread total
+    # sail past the decisive total-grounding gate (D27).
+    assert Decimal("1240") not in money_tokens("Gesamtbetrag: 1240,50 EUR")
+    assert not is_grounded(Decimal("1240"), "Rechnung Gesamt: 1240,50 EUR")
+    # Grouped thousands with trailing extra digits must not emit a truncated token.
+    assert Decimal("1") not in money_tokens("value 1,2400 here")
+
+
+def test_scientific_notation_plus_is_not_a_partial_match():
+    # '+' must terminate a token on both sides, so 1E+3 never yields a bare 1 or 3.
+    assert Decimal("1") not in money_tokens("coefficient 1E+3 applied")
+    assert Decimal("3") not in money_tokens("coefficient 1E+3 applied")
+
+
 # --- parse_llm_json: messy model output still yields an object (D22) -----------
 
 
@@ -106,6 +124,22 @@ def test_invalid_json_between_braces_fails_closed():
         parse_llm_json('{"total_value": 12,40, "currency": USD}')
 
 
+def test_non_string_input_fails_closed():
+    # bytes / a provider content-parts list must fail closed, not crash on .find
+    # with an untyped AttributeError the caller's ExtractionError catch would miss.
+    for bad in (b'{"a": 1}', [{"type": "text", "text": "{}"}], 123):
+        with pytest.raises(ExtractionError):
+            parse_llm_json(bad)
+
+
+def test_valid_json_string_content_is_not_corrupted():
+    # A comma before ']'/'}' INSIDE a string literal must survive: valid JSON is
+    # parsed verbatim, never rewritten by the trailing-comma repair.
+    data = parse_llm_json('{"vendor": "Acme, ] Inc", "rationale": "checked [a, b,]"}')
+    assert data["vendor"] == "Acme, ] Inc"
+    assert data["rationale"] == "checked [a, b,]"
+
+
 # --- Money hard rule: Decimal-from-string, never float (D1) --------------------
 
 
@@ -117,3 +151,24 @@ def test_money_rejects_float():
 def test_money_parses_string_and_int():
     assert Money(value="1,240.00".replace(",", ""), currency="USD").value == Decimal("1240.00")
     assert Money(value=1240, currency="USD").value == Decimal("1240")
+
+
+def test_money_rejects_nan_and_infinity():
+    # Non-finite values would raise InvalidOperation at a downstream comparison,
+    # escaping an `except ValidationError` fail-closed catch (D34).
+    for bad in ("NaN", "sNaN", "Infinity", "-Infinity"):
+        with pytest.raises(ValueError):
+            Money(value=bad, currency="USD")
+
+
+def test_numeric_cap_applies_to_integers_and_decimals():
+    # D34's 50-char cap must hold on the JSON-int and JSON-number(Decimal) paths,
+    # not only the string path — otherwise a multi-thousand-digit value rides into
+    # check details, the Decision echo, and traces.
+    from agentgate.core.schemas import MAX_NUMERIC_CHARS
+
+    big_int = 10 ** (MAX_NUMERIC_CHARS + 5)  # 56 digits
+    with pytest.raises(ValueError):
+        Money(value=big_int, currency="USD")
+    with pytest.raises(ValueError):
+        Money(value=Decimal("1" * (MAX_NUMERIC_CHARS + 5)), currency="USD")
