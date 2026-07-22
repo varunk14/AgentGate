@@ -87,9 +87,10 @@ export async function extractPdfText(data: ArrayBuffer): Promise<string> {
 
       const runs: PositionedRun[] = [];
       for (const item of content.items) {
-        if (!("str" in item) || !item.str.trim()) continue;
+        const str = item.str;
+        if (!str?.trim()) continue;
         runs.push({
-          str: item.str,
+          str,
           x: item.transform[4],
           y: item.transform[5],
           width: item.width,
