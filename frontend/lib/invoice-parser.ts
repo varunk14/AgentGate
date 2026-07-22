@@ -41,15 +41,107 @@ function titleCaseVendor(line: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+const MONTHS: Record<string, string> = {
+  january: "01", february: "02", march: "03", april: "04",
+  may: "05", june: "06", july: "07", august: "08",
+  september: "09", october: "10", november: "11", december: "12",
+};
+
+/** Convert "July 14, 2026" to "2026-07-14"; throws on unknown month. */
+function isoDateFromLong(raw: string): string {
+  const m = raw.match(/^([A-Za-z]+) (\d{1,2}), (\d{4})$/);
+  const month = m && MONTHS[m[1].toLowerCase()];
+  if (!m || !month) throw new Error(`Could not parse issue date: ${raw}`);
+  return `${m[3]}-${month}-${m[2].padStart(2, "0")}`;
+}
+
 /**
- * Parse realistic plain-text invoices (Acme / Northwind demo formats shipped
- * in public/invoices/). Deterministic — no LLM — mirrors what an upstream
- * extractor would produce before AgentGate verifies.
+ * Parse realistic plain-text invoices. Deterministic — no LLM — mirrors what
+ * an upstream extractor would produce before AgentGate verifies. Two layouts
+ * are recognized: the classic table format shipped in public/invoices/
+ * (Invoice #: / Total Due:) and the Stripe-style billing layout
+ * (Invoice number / Date of issue / Amount due, table with a Tax column).
  */
 export function parseInvoiceText(raw_text: string): ParsedInvoice {
   const text = raw_text.replace(/\r\n/g, "\n").trim();
   if (!text) throw new Error("Invoice text is empty.");
+  if (/Invoice number/i.test(text) && /Date of issue|Amount due/i.test(text)) {
+    return parseStripeStyle(text);
+  }
+  return parseClassic(text);
+}
 
+/** Stripe-style billing layout (the format of most SaaS invoices). */
+function parseStripeStyle(text: string): ParsedInvoice {
+  const numberMatch = text.match(/Invoice number[ \t]+(.+)/i);
+  if (!numberMatch) throw new Error("Could not find invoice number (Invoice number …).");
+  // PDF text layers sometimes drop the hyphen glyph in "XXXX-0000" numbers,
+  // leaving a gap (often a non-breaking space); rejoin the parts with the hyphen.
+  const invoice_number = numberMatch[1].trim().replace(/\s+/g, "-");
+
+  const dateMatch = text.match(/Date of issue[ \t]+([A-Za-z]+ \d{1,2}, \d{4})/i);
+  if (!dateMatch) throw new Error("Could not find issue date (Date of issue …).");
+  const date = isoDateFromLong(dateMatch[1]);
+
+  // The issuer sits left of "Bill to" on the two-column header line.
+  const vendorMatch = text.match(/^(.+?)[ \t]{2,}Bill to\b/im);
+  if (!vendorMatch) throw new Error("Could not find the issuing vendor (line before 'Bill to').");
+  const vendor = vendorMatch[1].trim();
+
+  const currencyMatch = text.match(/\$[\d,]+\.\d{2}[ \t]+([A-Z]{3})\b/);
+  const currency = currencyMatch ? currencyMatch[1] : "USD";
+
+  const line_items: LineItem[] = [];
+  let inTable = false;
+  for (const line of text.split("\n")) {
+    if (/^Description\b/i.test(line.trim())) {
+      inTable = true;
+      continue;
+    }
+    if (!inTable) continue;
+    if (/^\s*Subtotal\b/i.test(line)) break;
+    // description  qty  unit-price  tax%  amount
+    const row = line.match(
+      /^[ \t]*(.+?)[ \t]{2,}(\d+)[ \t]+\$?([\d,]+\.\d{2})[ \t]+[\d.]+%[ \t]+\$?([\d,]+\.\d{2})\s*$/,
+    );
+    if (!row) continue;
+    const [, description, quantity, unitRaw, amountRaw] = row;
+    line_items.push({
+      description: description.trim(),
+      quantity,
+      unit_price: { value: normalizeMoney(unitRaw), currency },
+      amount: { value: normalizeMoney(amountRaw), currency },
+      kind: "charge",
+    });
+  }
+  if (line_items.length === 0) {
+    throw new Error("No line items found in invoice table.");
+  }
+
+  const totalMatch =
+    text.match(/Amount due[ \t]+\$?([\d,]+\.\d{2})/i) ??
+    text.match(/^\s*Total[ \t]+\$?([\d,]+\.\d{2})/im);
+  if (!totalMatch) throw new Error("Could not find Amount due / Total.");
+
+  const subtotalMatch = text.match(/Subtotal[ \t]+\$?([\d,]+\.\d{2})/i);
+
+  return {
+    invoice_number,
+    vendor,
+    date,
+    currency,
+    line_items,
+    tax_lines: [],
+    subtotal: subtotalMatch
+      ? { value: normalizeMoney(subtotalMatch[1]), currency }
+      : undefined,
+    total: { value: normalizeMoney(totalMatch[1]), currency },
+    raw_text: text,
+  };
+}
+
+/** Classic fixed-width table format (the fixtures in public/invoices/). */
+function parseClassic(text: string): ParsedInvoice {
   const lines = text.split("\n");
   const vendor = titleCaseVendor(lines[0] ?? "Unknown Vendor");
 

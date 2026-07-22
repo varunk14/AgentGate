@@ -101,6 +101,18 @@ test("uploading a PDF invoice extracts its text layer, parses, and verifies", as
   await expect(page.getByTestId("decision-banner")).toHaveText("allow");
 });
 
+test("a Stripe-style PDF invoice (Invoice number / Amount due layout) parses and verifies", async ({ page }) => {
+  await page.goto("/demo");
+  await page.setInputFiles(
+    '[data-testid="invoice-upload"]',
+    path.join(__dirname, "fixtures", "meridian-stripe-style.pdf"),
+  );
+  await expect(page.getByTestId("verify")).toBeEnabled();
+  await expect(page.getByTestId("proposal-amount")).toHaveValue("84.00");
+  await page.click('[data-testid="verify"]');
+  await expect(page.getByTestId("decision-banner")).toHaveText("allow");
+});
+
 test("/verify redirects to the live demo", async ({ page }) => {
   await page.goto("/verify?invoice=acme-inv-001");
   await expect(page).toHaveURL(/\/demo\?invoice=acme-inv-001/);
