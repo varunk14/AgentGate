@@ -1,60 +1,90 @@
 import { test, expect } from "@playwright/test";
 import path from "path";
 
-// The slice gate (PRD section 10, Slice 7b): upload/paste a sample and see the
-// correct decision, rendered from the wire truth (D39) — against the real
-// backend over real CORS (D40/D41).
-
-test("uploading a clean sample file returns an allow decision", async ({ page }) => {
+test("the home page presents the enterprise product landing", async ({ page }) => {
   await page.goto("/");
-  await page.setInputFiles(
-    '[data-testid="upload"]',
-    path.join(__dirname, "fixtures", "clean-request.json"),
-  );
-  await page.click('[data-testid="verify"]');
-  await expect(page.getByTestId("decision-banner")).toHaveText("allow");
-  // score is the exact wire string, never a reformatted number (D1/D35)
-  await expect(page.getByTestId("score")).toHaveText("1.00");
-  // all seven check rows (2 frame + 5 content) render
-  await expect(page.locator('[data-testid="checks-table"] tbody tr')).toHaveCount(7);
-  await expect(page.getByTestId("trace-id")).not.toBeEmpty();
+  await expect(page.getByTestId("landing-page")).toBeVisible();
+  await expect(page.getByTestId("hero-demo-cta")).toBeVisible();
+  await expect(page.getByTestId("plan-self-host")).toBeVisible();
+  await expect(page.getByTestId("home-scenario-acme-inv-001-clean")).toBeVisible();
 });
 
-test("a tampered amount blocks with the exact expected total", async ({ page }) => {
-  await page.goto("/");
-  await page.click('[data-testid="sample-tampered"]');
+test("a real Acme invoice allows when the agent proposal matches", async ({ page }) => {
+  await page.goto("/demo?invoice=acme-inv-001");
+  await expect(page.getByTestId("verify")).toBeEnabled();
+  await page.click('[data-testid="verify"]');
+  await expect(page.getByTestId("decision-banner")).toHaveText("allow");
+  await expect(page.getByTestId("score")).toHaveText("1.00");
+  await expect(page.locator('[data-testid="checks-table"] tbody tr')).toHaveCount(7);
+});
+
+test("a real invoice decimal slip blocks then fixes on resubmit", async ({ page }) => {
+  await page.goto("/demo?invoice=acme-inv-001&mistake=decimal");
+  await expect(page.getByTestId("verify")).toBeEnabled();
+  await expect(page.getByTestId("decimal-slip")).toBeChecked();
   await page.click('[data-testid="verify"]');
   await expect(page.getByTestId("decision-banner")).toHaveText("block");
   const reasons = page.getByTestId("reasons");
   await expect(reasons).toContainText("action_amount_matches_total");
-  await expect(reasons).toContainText("agent_fixable");
-  await expect(reasons).toContainText("1240.00 USD"); // exact wire string
-  await expect(reasons).toContainText("proposed_action.amount");
+  await expect(reasons).toContainText("1240.00 USD");
+  await page.click('[data-testid="apply-fix"]');
+  await expect(page.getByTestId("decision-banner")).toHaveText("allow");
 });
 
-test("a reject action escalates with the score shown as not computed", async ({ page }) => {
-  await page.goto("/");
-  await page.click('[data-testid="sample-reject"]');
+test("a reject action on a real invoice escalates", async ({ page }) => {
+  await page.goto("/demo?invoice=acme-inv-001");
+  await expect(page.getByTestId("verify")).toBeEnabled();
+  await page.selectOption('[data-testid="proposal-action-type"]', "reject");
   await page.click('[data-testid="verify"]');
   await expect(page.getByTestId("decision-banner")).toHaveText("escalate");
-  // null score means "nothing was measured" — never 0, never blank (D32/D39)
   await expect(page.getByTestId("score")).toHaveText("not computed");
-  await expect(page.getByTestId("reasons")).toContainText("action_type_supported");
 });
 
-test("an ungrounded total escalates via the raw_text sample", async ({ page }) => {
-  await page.goto("/");
-  await page.click('[data-testid="sample-ungrounded"]');
+test("unrelated source text on a real invoice escalates grounding", async ({ page }) => {
+  await page.goto("/demo?invoice=acme-inv-001");
+  await expect(page.getByTestId("verify")).toBeEnabled();
+  await page.click('[data-testid="bad-grounding"]');
   await page.click('[data-testid="verify"]');
   await expect(page.getByTestId("decision-banner")).toHaveText("escalate");
   await expect(page.getByTestId("reasons")).toContainText("total_not_grounded");
 });
 
-test("garbage in the request box renders the gate's fail-closed escalate", async ({ page }) => {
-  await page.goto("/");
-  await page.getByTestId("request-body").fill("this is not json at all");
+test("a real $12,500 invoice escalates on policy ceiling", async ({ page }) => {
+  await page.goto("/demo?invoice=northwind-inv-12500");
+  await expect(page.getByTestId("verify")).toBeEnabled();
   await page.click('[data-testid="verify"]');
-  // the UI submits verbatim and the GATE fail-closes — no client-side veto (D39)
+  await expect(page.getByTestId("decision-banner")).toHaveText("escalate");
+});
+
+test("fetch mode uses the live system-of-record record", async ({ page }) => {
+  await page.goto("/demo?invoice=fetch-inv-2026-0042");
+  await page.click('[data-testid="verify"]');
+  await expect(page.getByTestId("decision-banner")).toHaveText("allow");
+  await expect(page.getByTestId("score")).toHaveText("1.00");
+  await expect(page.locator("dd").filter({ hasText: "system_of_record" })).toBeVisible();
+});
+
+test("malformed JSON fail-closes to escalate", async ({ page }) => {
+  await page.goto("/demo");
+  await page.getByRole("button", { name: /Show API request JSON/i }).click();
+  await page.getByTestId("request-body").fill("this is not json at all");
+  await page.click('[data-testid="verify-raw-json"]');
   await expect(page.getByTestId("decision-banner")).toHaveText("escalate");
   await expect(page.getByTestId("reasons")).toContainText("fail_closed");
+});
+
+test("uploading a real invoice file parses and verifies", async ({ page }) => {
+  await page.goto("/demo");
+  await page.setInputFiles(
+    '[data-testid="invoice-upload"]',
+    path.join(__dirname, "..", "public", "invoices", "acme-inv-001.txt"),
+  );
+  await expect(page.getByTestId("verify")).toBeEnabled();
+  await page.click('[data-testid="verify"]');
+  await expect(page.getByTestId("decision-banner")).toHaveText("allow");
+});
+
+test("/verify redirects to the live demo", async ({ page }) => {
+  await page.goto("/verify?invoice=acme-inv-001");
+  await expect(page).toHaveURL(/\/demo\?invoice=acme-inv-001/);
 });

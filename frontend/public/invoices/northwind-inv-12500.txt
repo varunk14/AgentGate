@@ -1,0 +1,25 @@
+NORTHWIND DATA SERVICES
+400 Market Street, Seattle, WA 98101
+billing@northwind.example  |  Tax ID 91-4455667
+
+INVOICE
+
+Invoice #: INV-2026-0201
+Issue Date: 2026-07-10
+Due Date: 2026-08-09
+
+Bill To:
+  Contoso Analytics
+  1200 Tech Park Drive, Austin, TX 78701
+
+--------------------------------------------------------------
+Description                 Qty    Unit Price        Amount
+--------------------------------------------------------------
+Annual data platform license   1   $12,500.00     $12,500.00
+--------------------------------------------------------------
+                                     Subtotal:    $12,500.00
+                                     Tax (0.0%):      $0.00
+                                     Total Due:    $12,500.00
+--------------------------------------------------------------
+
+Net 30. Wire instructions on file.

@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AgentGate",
+  title: "AgentGate — Authorization layer for AI agent spending",
   description:
-    "Pre-action reliability gate for AI agents: verify a proposed action against caller-supplied evidence and get ALLOW / BLOCK / ESCALATE with a machine-readable reason.",
+    "Verify every agent-proposed payment against invoice evidence before it executes. Deterministic allow, block, or escalate with machine-readable reasons.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

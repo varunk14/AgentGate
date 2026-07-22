@@ -33,6 +33,7 @@ export default defineConfig({
       timeout: 30_000,
       env: {
         AGENTGATE_CORS_ORIGINS: FRONTEND_ORIGIN,
+        AGENTGATE_RECORDS_DIR: "data/system_of_record",
       },
     },
     {
