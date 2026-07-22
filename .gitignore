@@ -32,3 +32,5 @@ blob-report/
 *.swp
 .idea/
 .vscode/
+.vercel
+.env*.local

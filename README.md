@@ -12,7 +12,7 @@ machine-readable reason so the agent can correct itself.
 See `DECISIONS.md` for the design reasoning. This project is a work in progress,
 built incrementally.
 
-**Live demo:** [dashboard](https://agentgate-two-pi.vercel.app) backed by the
+**Live demo:** [dashboard](https://agent-gate-gamma.vercel.app) backed by the
 [API](https://agentgate-api-mvob.onrender.com/health) (free tier — the first
 request after idle can take up to a minute while the backend wakes).
 
