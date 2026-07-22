@@ -63,7 +63,12 @@ function isoDateFromLong(raw: string): string {
  * (Invoice number / Date of issue / Amount due, table with a Tax column).
  */
 export function parseInvoiceText(raw_text: string): ParsedInvoice {
-  const text = raw_text.replace(/\r\n/g, "\n").trim();
+  // PDF text layers and viewer copies can carry invisible control characters
+  // (e.g. a NUL where a hyphen glyph was); strip everything but \t and \n.
+  const text = raw_text
+    .replace(/\r\n/g, "\n")
+    .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "")
+    .trim();
   if (!text) throw new Error("Invoice text is empty.");
   if (/Invoice number/i.test(text) && /Date of issue|Amount due/i.test(text)) {
     return parseStripeStyle(text);
@@ -83,10 +88,25 @@ function parseStripeStyle(text: string): ParsedInvoice {
   if (!dateMatch) throw new Error("Could not find issue date (Date of issue …).");
   const date = isoDateFromLong(dateMatch[1]);
 
-  // The issuer sits left of "Bill to" on the two-column header line.
+  // Coordinate-reconstructed text keeps the two-column header, so the issuer
+  // sits left of "Bill to" on one line. Viewer-copied text flattens columns
+  // ("Bill to" stands alone) — fall back to the first company-looking line of
+  // the seller block above it (skipping invoice metadata and registration ids).
   const vendorMatch = text.match(/^(.+?)[ \t]{2,}Bill to\b/im);
-  if (!vendorMatch) throw new Error("Could not find the issuing vendor (line before 'Bill to').");
-  const vendor = vendorMatch[1].trim();
+  let vendor = vendorMatch ? vendorMatch[1].trim() : "";
+  if (!vendor) {
+    const flatLines = text.split("\n").map((l) => l.trim());
+    const billToIdx = flatLines.findIndex((l) => /^Bill to\b/i.test(l));
+    for (let i = 0; i < billToIdx; i++) {
+      const l = flatLines[i];
+      if (!l) continue;
+      if (/^(page \d|invoice\b|date of issue|date due|vat\b)/i.test(l)) continue;
+      if (/^[A-Z0-9]{6,}$/.test(l)) continue;
+      vendor = l;
+      break;
+    }
+  }
+  if (!vendor) throw new Error("Could not find the issuing vendor (line before 'Bill to').");
 
   const currencyMatch = text.match(/\$[\d,]+\.\d{2}[ \t]+([A-Z]{3})\b/);
   const currency = currencyMatch ? currencyMatch[1] : "USD";
@@ -100,9 +120,11 @@ function parseStripeStyle(text: string): ParsedInvoice {
     }
     if (!inTable) continue;
     if (/^\s*Subtotal\b/i.test(line)) break;
-    // description  qty  unit-price  tax%  amount
+    // description  qty  unit-price  tax%  amount — single-space separators
+    // allowed (viewer copies collapse columns); the money/percent tail keeps
+    // the match unambiguous.
     const row = line.match(
-      /^[ \t]*(.+?)[ \t]{2,}(\d+)[ \t]+\$?([\d,]+\.\d{2})[ \t]+[\d.]+%[ \t]+\$?([\d,]+\.\d{2})\s*$/,
+      /^[ \t]*(.+?)[ \t]+(\d+)[ \t]+\$?([\d,]+\.\d{2})[ \t]+[\d.]+%[ \t]+\$?([\d,]+\.\d{2})\s*$/,
     );
     if (!row) continue;
     const [, description, quantity, unitRaw, amountRaw] = row;

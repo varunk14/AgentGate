@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import fs from "fs";
 import path from "path";
 
 test("the home page presents the enterprise product landing", async ({ page }) => {
@@ -108,6 +109,19 @@ test("a Stripe-style PDF invoice (Invoice number / Amount due layout) parses and
     path.join(__dirname, "fixtures", "meridian-stripe-style.pdf"),
   );
   await expect(page.getByTestId("verify")).toBeEnabled();
+  await expect(page.getByTestId("proposal-amount")).toHaveValue("84.00");
+  await page.click('[data-testid="verify"]');
+  await expect(page.getByTestId("decision-banner")).toHaveText("allow");
+});
+
+test("pasting viewer-copied Stripe-style invoice text parses and verifies", async ({ page }) => {
+  const copied = fs.readFileSync(
+    path.join(__dirname, "fixtures", "meridian-viewer-copy.txt"),
+    "utf8",
+  );
+  await page.goto("/demo");
+  await page.getByTestId("invoice-paste").fill(copied);
+  await page.getByTestId("invoice-paste").blur();
   await expect(page.getByTestId("proposal-amount")).toHaveValue("84.00");
   await page.click('[data-testid="verify"]');
   await expect(page.getByTestId("decision-banner")).toHaveText("allow");

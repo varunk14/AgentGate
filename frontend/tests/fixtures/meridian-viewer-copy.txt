@@ -1,0 +1,22 @@
+Page 1 of 1
+Invoice
+Invoice number   MERIDIAN   0042
+Date of issue   July 20, 2026
+Date due   July 20, 2026
+VAT Registration   Test GST
+9911TEST0001XYZ
+Meridian Cloud Services
+100 Signal Avenue
+Austin, TX 78701
+United States
+billing@meridian.example
+Bill to
+Example Buyer Co
+42 Test Lane
+Springfield, IL 62704
+$84.00 USD due July 20, 2026
+Description   Qty   Unit price   Tax   Amount
+Team plan seats, monthly   4   $21.00   0%   $84.00
+Subtotal   $84.00
+Total   $84.00
+Amount due   $84.00 USD
