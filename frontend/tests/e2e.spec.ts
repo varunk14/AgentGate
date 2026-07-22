@@ -66,6 +66,11 @@ test("fetch mode uses the live system-of-record record", async ({ page }) => {
 
 test("malformed JSON fail-closes to escalate", async ({ page }) => {
   await page.goto("/demo");
+  // Wait for the default invoice's async load to settle: when it lands it
+  // regenerates the request body and discards any advanced-editor override,
+  // so filling before that point loses the fill (CI-speed race).
+  await expect(page.getByTestId("verify")).toBeEnabled();
+  await expect(page.getByTestId("proposal-amount")).toHaveValue("1240.00");
   await page.getByRole("button", { name: /Show API request JSON/i }).click();
   await page.getByTestId("request-body").fill("this is not json at all");
   await page.click('[data-testid="verify-raw-json"]');
