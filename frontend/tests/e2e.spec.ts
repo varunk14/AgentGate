@@ -84,6 +84,18 @@ test("uploading a real invoice file parses and verifies", async ({ page }) => {
   await expect(page.getByTestId("decision-banner")).toHaveText("allow");
 });
 
+test("uploading a PDF invoice extracts its text layer, parses, and verifies", async ({ page }) => {
+  await page.goto("/demo");
+  await page.setInputFiles(
+    '[data-testid="invoice-upload"]',
+    path.join(__dirname, "fixtures", "brightpath-inv-2026-0788.pdf"),
+  );
+  await expect(page.getByTestId("verify")).toBeEnabled();
+  await expect(page.getByTestId("proposal-amount")).toHaveValue("6200.00");
+  await page.click('[data-testid="verify"]');
+  await expect(page.getByTestId("decision-banner")).toHaveText("allow");
+});
+
 test("/verify redirects to the live demo", async ({ page }) => {
   await page.goto("/verify?invoice=acme-inv-001");
   await expect(page).toHaveURL(/\/demo\?invoice=acme-inv-001/);

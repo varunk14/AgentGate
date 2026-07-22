@@ -273,8 +273,18 @@ function VerifyDashboardInner() {
   }
 
   async function onDropFile(file: File) {
+    if (/\.pdf$/i.test(file.name) || file.type === "application/pdf") {
+      setLoadError(null);
+      try {
+        const { extractPdfText } = await import("../lib/pdf-text");
+        loadFromText(await extractPdfText(await file.arrayBuffer()));
+      } catch (err) {
+        setLoadError(String(err));
+      }
+      return;
+    }
     if (!file.name.match(/\.(txt|text)$/i) && file.type && !file.type.includes("text")) {
-      setLoadError("Drop a plain-text invoice (.txt). PDF parsing belongs upstream of the gate.");
+      setLoadError("Drop a plain-text invoice (.txt) or a digital PDF with a text layer.");
       return;
     }
     loadFromText(await file.text());
@@ -341,13 +351,15 @@ function VerifyDashboardInner() {
           }}
           className="mt-4 rounded-xl border border-dashed border-white/15 bg-zinc-950/50 p-6 text-center"
         >
-          <p className="text-sm text-zinc-300">Drag and drop a real invoice .txt file</p>
-          <p className="mt-1 text-xs text-zinc-500">Or paste invoice text below</p>
+          <p className="text-sm text-zinc-300">Drag and drop a real invoice .txt or .pdf file</p>
+          <p className="mt-1 text-xs text-zinc-500">
+            Or paste invoice text below · scanned PDFs need OCR upstream
+          </p>
           <label className="mt-3 inline-block cursor-pointer text-xs text-violet-300 hover:text-violet-200">
             Browse file
             <input
               type="file"
-              accept=".txt,text/plain"
+              accept=".txt,text/plain,.pdf,application/pdf"
               data-testid="invoice-upload"
               className="hidden"
               onChange={(e) => {

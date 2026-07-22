@@ -90,9 +90,9 @@ The API always speaks JSON — that is the **wire contract**. But the demo no lo
 2. **Parses** them deterministically into structured fields + `raw_text`
 3. Builds the same `POST /verify` body production uses
 4. Lets you simulate agent mistakes (decimal slip, wrong action, bad grounding)
-5. Supports **drag-and-drop** of your own invoice `.txt`
+5. Supports **drag-and-drop** of your own invoice `.txt` or `.pdf`
 
-PDF upload is intentionally **not** faked inside AgentGate — PDF reading belongs upstream. Paste extracted text or drop `.txt`.
+Digital PDFs are read in the browser: pdf.js extracts the text layer and the layout (line breaks, column spacing) is reconstructed deterministically from glyph coordinates — no OCR, no LLM — then fed through the same parser as `.txt`. This is still the *upstream* layer simulated client-side; the gate only ever sees the JSON body. Scanned (image-only) PDFs are rejected with an instructive error: OCR belongs upstream of the gate — paste the extracted text instead.
 
 ---
 
