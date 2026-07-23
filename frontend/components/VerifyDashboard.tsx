@@ -351,7 +351,7 @@ function VerifyDashboardInner() {
           }}
           className="mt-4 rounded-xl border border-dashed border-white/15 bg-zinc-950/50 p-6 text-center"
         >
-          <p className="text-sm text-zinc-300">Drag and drop a real invoice .txt or .pdf file</p>
+          <p className="text-sm text-zinc-300">Drag and drop a real invoice or quotation (.txt or .pdf)</p>
           <p className="mt-1 text-xs text-zinc-500">
             Or paste invoice text below · scanned PDFs need OCR upstream
           </p>

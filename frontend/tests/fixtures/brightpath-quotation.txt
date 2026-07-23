@@ -1,0 +1,26 @@
+BRIGHTPATH CONSULTING
+550 Harbor Street, Suite 210, Portland, OR 97201
+accounts@brightpath.example
+
+QUOTATION
+
+Quote #: QUO-2026-0114
+Quote Date: 2026-07-21
+Valid Until: 2026-08-20
+
+Prepared for:
+  Meridian Logistics Inc
+  77 Freight Yard Road, Denver, CO 80216
+
+--------------------------------------------------------------
+Description                 Qty    Unit Price        Amount
+--------------------------------------------------------------
+Compliance audit package      1    $4,500.00      $4,500.00
+Onsite training day           2      $800.00      $1,600.00
+--------------------------------------------------------------
+                                     Subtotal:     $6,100.00
+                                     Tax (0.0%):       $0.00
+                                     Total:         $6,100.00
+--------------------------------------------------------------
+
+Quote valid 30 days. Prices exclude applicable taxes.

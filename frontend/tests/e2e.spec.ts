@@ -127,6 +127,31 @@ test("pasting viewer-copied Stripe-style invoice text parses and verifies", asyn
   await expect(page.getByTestId("decision-banner")).toHaveText("allow");
 });
 
+test("a classic-layout quotation (Quote #: / Total:) parses and verifies", async ({ page }) => {
+  await page.goto("/demo");
+  await page.setInputFiles(
+    '[data-testid="invoice-upload"]',
+    path.join(__dirname, "fixtures", "brightpath-quotation.txt"),
+  );
+  await expect(page.getByTestId("verify")).toBeEnabled();
+  await expect(page.getByTestId("proposal-amount")).toHaveValue("6100.00");
+  await page.click('[data-testid="verify"]');
+  await expect(page.getByTestId("decision-banner")).toHaveText("allow");
+});
+
+test("a pasted Stripe-style quote (Quote number / Quote date) parses and verifies", async ({ page }) => {
+  const copied = fs.readFileSync(
+    path.join(__dirname, "fixtures", "meridian-quote-copy.txt"),
+    "utf8",
+  );
+  await page.goto("/demo");
+  await page.getByTestId("invoice-paste").fill(copied);
+  await page.getByTestId("invoice-paste").blur();
+  await expect(page.getByTestId("proposal-amount")).toHaveValue("5400.00");
+  await page.click('[data-testid="verify"]');
+  await expect(page.getByTestId("decision-banner")).toHaveText("allow");
+});
+
 test("/verify redirects to the live demo", async ({ page }) => {
   await page.goto("/verify?invoice=acme-inv-001");
   await expect(page).toHaveURL(/\/demo\?invoice=acme-inv-001/);

@@ -70,7 +70,10 @@ export function parseInvoiceText(raw_text: string): ParsedInvoice {
     .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "")
     .trim();
   if (!text) throw new Error("Invoice text is empty.");
-  if (/Invoice number/i.test(text) && /Date of issue|Amount due/i.test(text)) {
+  if (
+    /(?:Invoice|Quote) number/i.test(text) &&
+    /Date of issue|Quote date|Amount due/i.test(text)
+  ) {
     return parseStripeStyle(text);
   }
   return parseClassic(text);
@@ -78,14 +81,16 @@ export function parseInvoiceText(raw_text: string): ParsedInvoice {
 
 /** Stripe-style billing layout (the format of most SaaS invoices). */
 function parseStripeStyle(text: string): ParsedInvoice {
-  const numberMatch = text.match(/Invoice number[ \t]+(.+)/i);
-  if (!numberMatch) throw new Error("Could not find invoice number (Invoice number …).");
+  const numberMatch = text.match(/(?:Invoice|Quote) number[ \t]+(.+)/i);
+  if (!numberMatch) throw new Error("Could not find the document number (Invoice number / Quote number …).");
   // PDF text layers sometimes drop the hyphen glyph in "XXXX-0000" numbers,
   // leaving a gap (often a non-breaking space); rejoin the parts with the hyphen.
   const invoice_number = numberMatch[1].trim().replace(/\s+/g, "-");
 
-  const dateMatch = text.match(/Date of issue[ \t]+([A-Za-z]+ \d{1,2}, \d{4})/i);
-  if (!dateMatch) throw new Error("Could not find issue date (Date of issue …).");
+  const dateMatch = text.match(
+    /(?:Date of issue|Quote date)[ \t]+([A-Za-z]+ \d{1,2}, \d{4})/i,
+  );
+  if (!dateMatch) throw new Error("Could not find issue date (Date of issue / Quote date …).");
   const date = isoDateFromLong(dateMatch[1]);
 
   // Coordinate-reconstructed text keeps the two-column header, so the issuer
@@ -100,7 +105,7 @@ function parseStripeStyle(text: string): ParsedInvoice {
     for (let i = 0; i < billToIdx; i++) {
       const l = flatLines[i];
       if (!l) continue;
-      if (/^(page \d|invoice\b|date of issue|date due|vat\b)/i.test(l)) continue;
+      if (/^(page \d|invoice\b|quote\b|date of issue|date due|expiration\b|vat\b)/i.test(l)) continue;
       if (/^[A-Z0-9]{6,}$/.test(l)) continue;
       vendor = l;
       break;
@@ -167,11 +172,11 @@ function parseClassic(text: string): ParsedInvoice {
   const lines = text.split("\n");
   const vendor = titleCaseVendor(lines[0] ?? "Unknown Vendor");
 
-  const invoiceMatch = text.match(/Invoice #:\s*(\S+)/i);
-  if (!invoiceMatch) throw new Error("Could not find invoice number (Invoice #: …).");
+  const invoiceMatch = text.match(/(?:Invoice|Quotation|Quote|Estimate)\s*#:\s*(\S+)/i);
+  if (!invoiceMatch) throw new Error("Could not find the document number (Invoice #: / Quote #: …).");
   const invoice_number = invoiceMatch[1];
 
-  const dateMatch = text.match(/Issue Date:\s*(\d{4}-\d{2}-\d{2})/i);
+  const dateMatch = text.match(/^\s*(?:Issue|Quote|Estimate)? ?Date:\s*(\d{4}-\d{2}-\d{2})/im);
   if (!dateMatch) throw new Error("Could not find issue date.");
   const date = dateMatch[1];
 
@@ -216,8 +221,11 @@ function parseClassic(text: string): ParsedInvoice {
     throw new Error("No line items found in invoice table.");
   }
 
-  const totalMatch = text.match(/Total Due:\s*\$?([\d,]+\.\d{2})/i);
-  if (!totalMatch) throw new Error("Could not find Total Due.");
+  // ^\s* anchoring keeps "Subtotal:" from matching the bare "Total:" form.
+  const totalMatch =
+    text.match(/(?:Total Due|Grand Total):\s*\$?([\d,]+\.\d{2})/i) ??
+    text.match(/^\s*Total:\s*\$?([\d,]+\.\d{2})/im);
+  if (!totalMatch) throw new Error("Could not find Total Due / Total.");
   const total = { value: normalizeMoney(totalMatch[1]), currency };
 
   const subtotalMatch = text.match(/Subtotal:\s*\$?([\d,]+\.\d{2})/i);
